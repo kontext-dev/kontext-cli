@@ -26,7 +26,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const apiBaseUrl =
     options.apiUrl ??
     process.env["KONTEXT_API_URL"] ??
-    "https://api.kontext.dev";
+    "https://api.kontext.security";
   const clientId = process.env["KONTEXT_CLIENT_ID"];
   const clientSecret = process.env["KONTEXT_CLIENT_SECRET"];
 

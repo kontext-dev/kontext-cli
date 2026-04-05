@@ -16,7 +16,7 @@ export async function loginCommand(options: LoginOptions): Promise<void> {
   const apiBaseUrl =
     options.apiUrl ??
     process.env["KONTEXT_API_URL"] ??
-    "https://api.kontext.dev";
+    "https://api.kontext.security";
 
   // Generate PKCE verifier and challenge
   const codeVerifier = randomBytes(32).toString("base64url");
