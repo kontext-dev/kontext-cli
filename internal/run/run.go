@@ -211,8 +211,6 @@ func launchAgent(_ context.Context, agentName string, env []string, extraArgs []
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
-	// Set process group for clean signal forwarding
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("launch %s: %w", agentName, err)
