@@ -122,7 +122,7 @@ func (CredentialKind) EnumDescriptor() ([]byte, []int) {
 	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{1}
 }
 
-type HookEventRequest struct {
+type ProcessHookEventRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	Agent         string                 `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`                          // "claude", "cursor", "codex"
@@ -136,20 +136,20 @@ type HookEventRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HookEventRequest) Reset() {
-	*x = HookEventRequest{}
+func (x *ProcessHookEventRequest) Reset() {
+	*x = ProcessHookEventRequest{}
 	mi := &file_kontext_agent_v1_agent_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HookEventRequest) String() string {
+func (x *ProcessHookEventRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HookEventRequest) ProtoMessage() {}
+func (*ProcessHookEventRequest) ProtoMessage() {}
 
-func (x *HookEventRequest) ProtoReflect() protoreflect.Message {
+func (x *ProcessHookEventRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_kontext_agent_v1_agent_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -161,68 +161,68 @@ func (x *HookEventRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HookEventRequest.ProtoReflect.Descriptor instead.
-func (*HookEventRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ProcessHookEventRequest.ProtoReflect.Descriptor instead.
+func (*ProcessHookEventRequest) Descriptor() ([]byte, []int) {
 	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *HookEventRequest) GetSessionId() string {
+func (x *ProcessHookEventRequest) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
 	}
 	return ""
 }
 
-func (x *HookEventRequest) GetAgent() string {
+func (x *ProcessHookEventRequest) GetAgent() string {
 	if x != nil {
 		return x.Agent
 	}
 	return ""
 }
 
-func (x *HookEventRequest) GetHookEvent() string {
+func (x *ProcessHookEventRequest) GetHookEvent() string {
 	if x != nil {
 		return x.HookEvent
 	}
 	return ""
 }
 
-func (x *HookEventRequest) GetToolName() string {
+func (x *ProcessHookEventRequest) GetToolName() string {
 	if x != nil {
 		return x.ToolName
 	}
 	return ""
 }
 
-func (x *HookEventRequest) GetToolInput() []byte {
+func (x *ProcessHookEventRequest) GetToolInput() []byte {
 	if x != nil {
 		return x.ToolInput
 	}
 	return nil
 }
 
-func (x *HookEventRequest) GetToolResponse() []byte {
+func (x *ProcessHookEventRequest) GetToolResponse() []byte {
 	if x != nil {
 		return x.ToolResponse
 	}
 	return nil
 }
 
-func (x *HookEventRequest) GetToolUseId() string {
+func (x *ProcessHookEventRequest) GetToolUseId() string {
 	if x != nil {
 		return x.ToolUseId
 	}
 	return ""
 }
 
-func (x *HookEventRequest) GetCwd() string {
+func (x *ProcessHookEventRequest) GetCwd() string {
 	if x != nil {
 		return x.Cwd
 	}
 	return ""
 }
 
-type HookEventResponse struct {
+type ProcessHookEventResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Decision Decision               `protobuf:"varint,1,opt,name=decision,proto3,enum=kontext.agent.v1.Decision" json:"decision,omitempty"`
 	Reason   string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -233,20 +233,20 @@ type HookEventResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HookEventResponse) Reset() {
-	*x = HookEventResponse{}
+func (x *ProcessHookEventResponse) Reset() {
+	*x = ProcessHookEventResponse{}
 	mi := &file_kontext_agent_v1_agent_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HookEventResponse) String() string {
+func (x *ProcessHookEventResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HookEventResponse) ProtoMessage() {}
+func (*ProcessHookEventResponse) ProtoMessage() {}
 
-func (x *HookEventResponse) ProtoReflect() protoreflect.Message {
+func (x *ProcessHookEventResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kontext_agent_v1_agent_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -258,33 +258,33 @@ func (x *HookEventResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HookEventResponse.ProtoReflect.Descriptor instead.
-func (*HookEventResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ProcessHookEventResponse.ProtoReflect.Descriptor instead.
+func (*ProcessHookEventResponse) Descriptor() ([]byte, []int) {
 	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *HookEventResponse) GetDecision() Decision {
+func (x *ProcessHookEventResponse) GetDecision() Decision {
 	if x != nil {
 		return x.Decision
 	}
 	return Decision_DECISION_UNSPECIFIED
 }
 
-func (x *HookEventResponse) GetReason() string {
+func (x *ProcessHookEventResponse) GetReason() string {
 	if x != nil {
 		return x.Reason
 	}
 	return ""
 }
 
-func (x *HookEventResponse) GetEventId() string {
+func (x *ProcessHookEventResponse) GetEventId() string {
 	if x != nil {
 		return x.EventId
 	}
 	return ""
 }
 
-func (x *HookEventResponse) GetCredential() *CredentialInjection {
+func (x *ProcessHookEventResponse) GetCredential() *CredentialInjection {
 	if x != nil {
 		return x.Credential
 	}
@@ -843,7 +843,7 @@ func (x *SyncPolicyRequest) GetSessionId() string {
 	return ""
 }
 
-type PolicyUpdate struct {
+type SyncPolicyResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// OpenFGA tuples for local evaluation
 	Tuples        []*PolicyTuple `protobuf:"bytes,1,rep,name=tuples,proto3" json:"tuples,omitempty"`
@@ -852,20 +852,20 @@ type PolicyUpdate struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PolicyUpdate) Reset() {
-	*x = PolicyUpdate{}
+func (x *SyncPolicyResponse) Reset() {
+	*x = SyncPolicyResponse{}
 	mi := &file_kontext_agent_v1_agent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PolicyUpdate) String() string {
+func (x *SyncPolicyResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PolicyUpdate) ProtoMessage() {}
+func (*SyncPolicyResponse) ProtoMessage() {}
 
-func (x *PolicyUpdate) ProtoReflect() protoreflect.Message {
+func (x *SyncPolicyResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_kontext_agent_v1_agent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -877,19 +877,19 @@ func (x *PolicyUpdate) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PolicyUpdate.ProtoReflect.Descriptor instead.
-func (*PolicyUpdate) Descriptor() ([]byte, []int) {
+// Deprecated: Use SyncPolicyResponse.ProtoReflect.Descriptor instead.
+func (*SyncPolicyResponse) Descriptor() ([]byte, []int) {
 	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *PolicyUpdate) GetTuples() []*PolicyTuple {
+func (x *SyncPolicyResponse) GetTuples() []*PolicyTuple {
 	if x != nil {
 		return x.Tuples
 	}
 	return nil
 }
 
-func (x *PolicyUpdate) GetFullSync() bool {
+func (x *SyncPolicyResponse) GetFullSync() bool {
 	if x != nil {
 		return x.FullSync
 	}
@@ -960,8 +960,8 @@ var File_kontext_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\n" +
-	"\x1ckontext/agent/v1/agent.proto\x12\x10kontext.agent.v1\"\xf9\x01\n" +
-	"\x10HookEventRequest\x12\x1d\n" +
+	"\x1ckontext/agent/v1/agent.proto\x12\x10kontext.agent.v1\"\x80\x02\n" +
+	"\x17ProcessHookEventRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
 	"\x05agent\x18\x02 \x01(\tR\x05agent\x12\x1d\n" +
@@ -972,8 +972,8 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"tool_input\x18\x05 \x01(\fR\ttoolInput\x12#\n" +
 	"\rtool_response\x18\x06 \x01(\fR\ftoolResponse\x12\x1e\n" +
 	"\vtool_use_id\x18\a \x01(\tR\ttoolUseId\x12\x10\n" +
-	"\x03cwd\x18\b \x01(\tR\x03cwd\"\xc5\x01\n" +
-	"\x11HookEventResponse\x126\n" +
+	"\x03cwd\x18\b \x01(\tR\x03cwd\"\xcc\x01\n" +
+	"\x18ProcessHookEventResponse\x126\n" +
 	"\bdecision\x18\x01 \x01(\x0e2\x1a.kontext.agent.v1.DecisionR\bdecision\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
 	"\bevent_id\x18\x03 \x01(\tR\aeventId\x12E\n" +
@@ -1026,8 +1026,8 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"expires_in\x18\a \x01(\x03R\texpiresIn\"2\n" +
 	"\x11SyncPolicyRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"b\n" +
-	"\fPolicyUpdate\x125\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"h\n" +
+	"\x12SyncPolicyResponse\x125\n" +
 	"\x06tuples\x18\x01 \x03(\v2\x1d.kontext.agent.v1.PolicyTupleR\x06tuples\x12\x1b\n" +
 	"\tfull_sync\x18\x02 \x01(\bR\bfullSync\"U\n" +
 	"\vPolicyTuple\x12\x12\n" +
@@ -1042,16 +1042,18 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\x0eCredentialKind\x12\x1f\n" +
 	"\x1bCREDENTIAL_KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CREDENTIAL_KIND_OAUTH\x10\x01\x12\x17\n" +
-	"\x13CREDENTIAL_KIND_KEY\x10\x022\xc6\x04\n" +
-	"\fAgentService\x12_\n" +
-	"\x10ProcessHookEvent\x12\".kontext.agent.v1.HookEventRequest\x1a#.kontext.agent.v1.HookEventResponse(\x010\x01\x12`\n" +
+	"\x13CREDENTIAL_KIND_KEY\x10\x022\xda\x04\n" +
+	"\fAgentService\x12m\n" +
+	"\x10ProcessHookEvent\x12).kontext.agent.v1.ProcessHookEventRequest\x1a*.kontext.agent.v1.ProcessHookEventResponse(\x010\x01\x12`\n" +
 	"\rCreateSession\x12&.kontext.agent.v1.CreateSessionRequest\x1a'.kontext.agent.v1.CreateSessionResponse\x12T\n" +
 	"\tHeartbeat\x12\".kontext.agent.v1.HeartbeatRequest\x1a#.kontext.agent.v1.HeartbeatResponse\x12W\n" +
 	"\n" +
 	"EndSession\x12#.kontext.agent.v1.EndSessionRequest\x1a$.kontext.agent.v1.EndSessionResponse\x12o\n" +
-	"\x12ExchangeCredential\x12+.kontext.agent.v1.ExchangeCredentialRequest\x1a,.kontext.agent.v1.ExchangeCredentialResponse\x12S\n" +
+	"\x12ExchangeCredential\x12+.kontext.agent.v1.ExchangeCredentialRequest\x1a,.kontext.agent.v1.ExchangeCredentialResponse\x12Y\n" +
 	"\n" +
-	"SyncPolicy\x12#.kontext.agent.v1.SyncPolicyRequest\x1a\x1e.kontext.agent.v1.PolicyUpdate0\x01BAZ?github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1;agentv1b\x06proto3"
+	"SyncPolicy\x12#.kontext.agent.v1.SyncPolicyRequest\x1a$.kontext.agent.v1.SyncPolicyResponse0\x01B\xc5\x01\n" +
+	"\x14com.kontext.agent.v1B\n" +
+	"AgentProtoP\x01Z?github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1;agentv1\xa2\x02\x03KAX\xaa\x02\x10Kontext.Agent.V1\xca\x02\x10Kontext\\Agent\\V1\xe2\x02\x1cKontext\\Agent\\V1\\GPBMetadata\xea\x02\x12Kontext::Agent::V1b\x06proto3"
 
 var (
 	file_kontext_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -1070,8 +1072,8 @@ var file_kontext_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 1
 var file_kontext_agent_v1_agent_proto_goTypes = []any{
 	(Decision)(0),                      // 0: kontext.agent.v1.Decision
 	(CredentialKind)(0),                // 1: kontext.agent.v1.CredentialKind
-	(*HookEventRequest)(nil),           // 2: kontext.agent.v1.HookEventRequest
-	(*HookEventResponse)(nil),          // 3: kontext.agent.v1.HookEventResponse
+	(*ProcessHookEventRequest)(nil),    // 2: kontext.agent.v1.ProcessHookEventRequest
+	(*ProcessHookEventResponse)(nil),   // 3: kontext.agent.v1.ProcessHookEventResponse
 	(*CredentialInjection)(nil),        // 4: kontext.agent.v1.CredentialInjection
 	(*CreateSessionRequest)(nil),       // 5: kontext.agent.v1.CreateSessionRequest
 	(*CreateSessionResponse)(nil),      // 6: kontext.agent.v1.CreateSessionResponse
@@ -1082,30 +1084,30 @@ var file_kontext_agent_v1_agent_proto_goTypes = []any{
 	(*ExchangeCredentialRequest)(nil),  // 11: kontext.agent.v1.ExchangeCredentialRequest
 	(*ExchangeCredentialResponse)(nil), // 12: kontext.agent.v1.ExchangeCredentialResponse
 	(*SyncPolicyRequest)(nil),          // 13: kontext.agent.v1.SyncPolicyRequest
-	(*PolicyUpdate)(nil),               // 14: kontext.agent.v1.PolicyUpdate
+	(*SyncPolicyResponse)(nil),         // 14: kontext.agent.v1.SyncPolicyResponse
 	(*PolicyTuple)(nil),                // 15: kontext.agent.v1.PolicyTuple
 	nil,                                // 16: kontext.agent.v1.CredentialInjection.EnvVarsEntry
 	nil,                                // 17: kontext.agent.v1.CreateSessionRequest.ClientInfoEntry
 }
 var file_kontext_agent_v1_agent_proto_depIdxs = []int32{
-	0,  // 0: kontext.agent.v1.HookEventResponse.decision:type_name -> kontext.agent.v1.Decision
-	4,  // 1: kontext.agent.v1.HookEventResponse.credential:type_name -> kontext.agent.v1.CredentialInjection
+	0,  // 0: kontext.agent.v1.ProcessHookEventResponse.decision:type_name -> kontext.agent.v1.Decision
+	4,  // 1: kontext.agent.v1.ProcessHookEventResponse.credential:type_name -> kontext.agent.v1.CredentialInjection
 	16, // 2: kontext.agent.v1.CredentialInjection.env_vars:type_name -> kontext.agent.v1.CredentialInjection.EnvVarsEntry
 	17, // 3: kontext.agent.v1.CreateSessionRequest.client_info:type_name -> kontext.agent.v1.CreateSessionRequest.ClientInfoEntry
 	1,  // 4: kontext.agent.v1.ExchangeCredentialResponse.kind:type_name -> kontext.agent.v1.CredentialKind
-	15, // 5: kontext.agent.v1.PolicyUpdate.tuples:type_name -> kontext.agent.v1.PolicyTuple
-	2,  // 6: kontext.agent.v1.AgentService.ProcessHookEvent:input_type -> kontext.agent.v1.HookEventRequest
+	15, // 5: kontext.agent.v1.SyncPolicyResponse.tuples:type_name -> kontext.agent.v1.PolicyTuple
+	2,  // 6: kontext.agent.v1.AgentService.ProcessHookEvent:input_type -> kontext.agent.v1.ProcessHookEventRequest
 	5,  // 7: kontext.agent.v1.AgentService.CreateSession:input_type -> kontext.agent.v1.CreateSessionRequest
 	7,  // 8: kontext.agent.v1.AgentService.Heartbeat:input_type -> kontext.agent.v1.HeartbeatRequest
 	9,  // 9: kontext.agent.v1.AgentService.EndSession:input_type -> kontext.agent.v1.EndSessionRequest
 	11, // 10: kontext.agent.v1.AgentService.ExchangeCredential:input_type -> kontext.agent.v1.ExchangeCredentialRequest
 	13, // 11: kontext.agent.v1.AgentService.SyncPolicy:input_type -> kontext.agent.v1.SyncPolicyRequest
-	3,  // 12: kontext.agent.v1.AgentService.ProcessHookEvent:output_type -> kontext.agent.v1.HookEventResponse
+	3,  // 12: kontext.agent.v1.AgentService.ProcessHookEvent:output_type -> kontext.agent.v1.ProcessHookEventResponse
 	6,  // 13: kontext.agent.v1.AgentService.CreateSession:output_type -> kontext.agent.v1.CreateSessionResponse
 	8,  // 14: kontext.agent.v1.AgentService.Heartbeat:output_type -> kontext.agent.v1.HeartbeatResponse
 	10, // 15: kontext.agent.v1.AgentService.EndSession:output_type -> kontext.agent.v1.EndSessionResponse
 	12, // 16: kontext.agent.v1.AgentService.ExchangeCredential:output_type -> kontext.agent.v1.ExchangeCredentialResponse
-	14, // 17: kontext.agent.v1.AgentService.SyncPolicy:output_type -> kontext.agent.v1.PolicyUpdate
+	14, // 17: kontext.agent.v1.AgentService.SyncPolicy:output_type -> kontext.agent.v1.SyncPolicyResponse
 	12, // [12:18] is the sub-list for method output_type
 	6,  // [6:12] is the sub-list for method input_type
 	6,  // [6:6] is the sub-list for extension type_name

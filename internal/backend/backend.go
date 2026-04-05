@@ -126,7 +126,7 @@ func (c *Client) EndSession(ctx context.Context, sessionID string) error {
 }
 
 // IngestEvent sends a single hook event to the backend.
-func (c *Client) IngestEvent(ctx context.Context, req *agentv1.HookEventRequest) error {
+func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error {
 	stream := c.rpc.ProcessHookEvent(ctx)
 	if err := stream.Send(req); err != nil {
 		return fmt.Errorf("send hook event: %w", err)

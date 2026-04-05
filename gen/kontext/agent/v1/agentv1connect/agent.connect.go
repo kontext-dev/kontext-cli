@@ -55,7 +55,7 @@ type AgentServiceClient interface {
 	// ProcessHookEvent streams tool call events from the CLI to the backend
 	// and receives policy decisions in return. Bidirectional streaming keeps
 	// the connection open for the session lifetime — no per-hook HTTP overhead.
-	ProcessHookEvent(context.Context) *connect.BidiStreamForClient[v1.HookEventRequest, v1.HookEventResponse]
+	ProcessHookEvent(context.Context) *connect.BidiStreamForClient[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]
 	// CreateSession establishes a governed agent session. Called once at the
 	// start of `kontext start`. Returns session context used for all subsequent
 	// hook evaluations.
@@ -72,7 +72,7 @@ type AgentServiceClient interface {
 	// SyncPolicy streams the current policy state for the session's org/agent.
 	// The sidecar caches this locally for fast hook evaluation. The server
 	// pushes updates when policy changes.
-	SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest]) (*connect.ServerStreamForClient[v1.PolicyUpdate], error)
+	SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest]) (*connect.ServerStreamForClient[v1.SyncPolicyResponse], error)
 }
 
 // NewAgentServiceClient constructs a client for the kontext.agent.v1.AgentService service. By
@@ -86,7 +86,7 @@ func NewAgentServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 	baseURL = strings.TrimRight(baseURL, "/")
 	agentServiceMethods := v1.File_kontext_agent_v1_agent_proto.Services().ByName("AgentService").Methods()
 	return &agentServiceClient{
-		processHookEvent: connect.NewClient[v1.HookEventRequest, v1.HookEventResponse](
+		processHookEvent: connect.NewClient[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse](
 			httpClient,
 			baseURL+AgentServiceProcessHookEventProcedure,
 			connect.WithSchema(agentServiceMethods.ByName("ProcessHookEvent")),
@@ -116,7 +116,7 @@ func NewAgentServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(agentServiceMethods.ByName("ExchangeCredential")),
 			connect.WithClientOptions(opts...),
 		),
-		syncPolicy: connect.NewClient[v1.SyncPolicyRequest, v1.PolicyUpdate](
+		syncPolicy: connect.NewClient[v1.SyncPolicyRequest, v1.SyncPolicyResponse](
 			httpClient,
 			baseURL+AgentServiceSyncPolicyProcedure,
 			connect.WithSchema(agentServiceMethods.ByName("SyncPolicy")),
@@ -127,16 +127,16 @@ func NewAgentServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 
 // agentServiceClient implements AgentServiceClient.
 type agentServiceClient struct {
-	processHookEvent   *connect.Client[v1.HookEventRequest, v1.HookEventResponse]
+	processHookEvent   *connect.Client[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]
 	createSession      *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
 	heartbeat          *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
 	endSession         *connect.Client[v1.EndSessionRequest, v1.EndSessionResponse]
 	exchangeCredential *connect.Client[v1.ExchangeCredentialRequest, v1.ExchangeCredentialResponse]
-	syncPolicy         *connect.Client[v1.SyncPolicyRequest, v1.PolicyUpdate]
+	syncPolicy         *connect.Client[v1.SyncPolicyRequest, v1.SyncPolicyResponse]
 }
 
 // ProcessHookEvent calls kontext.agent.v1.AgentService.ProcessHookEvent.
-func (c *agentServiceClient) ProcessHookEvent(ctx context.Context) *connect.BidiStreamForClient[v1.HookEventRequest, v1.HookEventResponse] {
+func (c *agentServiceClient) ProcessHookEvent(ctx context.Context) *connect.BidiStreamForClient[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse] {
 	return c.processHookEvent.CallBidiStream(ctx)
 }
 
@@ -161,7 +161,7 @@ func (c *agentServiceClient) ExchangeCredential(ctx context.Context, req *connec
 }
 
 // SyncPolicy calls kontext.agent.v1.AgentService.SyncPolicy.
-func (c *agentServiceClient) SyncPolicy(ctx context.Context, req *connect.Request[v1.SyncPolicyRequest]) (*connect.ServerStreamForClient[v1.PolicyUpdate], error) {
+func (c *agentServiceClient) SyncPolicy(ctx context.Context, req *connect.Request[v1.SyncPolicyRequest]) (*connect.ServerStreamForClient[v1.SyncPolicyResponse], error) {
 	return c.syncPolicy.CallServerStream(ctx, req)
 }
 
@@ -170,7 +170,7 @@ type AgentServiceHandler interface {
 	// ProcessHookEvent streams tool call events from the CLI to the backend
 	// and receives policy decisions in return. Bidirectional streaming keeps
 	// the connection open for the session lifetime — no per-hook HTTP overhead.
-	ProcessHookEvent(context.Context, *connect.BidiStream[v1.HookEventRequest, v1.HookEventResponse]) error
+	ProcessHookEvent(context.Context, *connect.BidiStream[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]) error
 	// CreateSession establishes a governed agent session. Called once at the
 	// start of `kontext start`. Returns session context used for all subsequent
 	// hook evaluations.
@@ -187,7 +187,7 @@ type AgentServiceHandler interface {
 	// SyncPolicy streams the current policy state for the session's org/agent.
 	// The sidecar caches this locally for fast hook evaluation. The server
 	// pushes updates when policy changes.
-	SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest], *connect.ServerStream[v1.PolicyUpdate]) error
+	SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest], *connect.ServerStream[v1.SyncPolicyResponse]) error
 }
 
 // NewAgentServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -256,7 +256,7 @@ func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOpti
 // UnimplementedAgentServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAgentServiceHandler struct{}
 
-func (UnimplementedAgentServiceHandler) ProcessHookEvent(context.Context, *connect.BidiStream[v1.HookEventRequest, v1.HookEventResponse]) error {
+func (UnimplementedAgentServiceHandler) ProcessHookEvent(context.Context, *connect.BidiStream[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.ProcessHookEvent is not implemented"))
 }
 
@@ -276,6 +276,6 @@ func (UnimplementedAgentServiceHandler) ExchangeCredential(context.Context, *con
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.ExchangeCredential is not implemented"))
 }
 
-func (UnimplementedAgentServiceHandler) SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest], *connect.ServerStream[v1.PolicyUpdate]) error {
+func (UnimplementedAgentServiceHandler) SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest], *connect.ServerStream[v1.SyncPolicyResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.SyncPolicy is not implemented"))
 }

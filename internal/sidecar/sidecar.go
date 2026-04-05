@@ -105,7 +105,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
-	hookEvent := &agentv1.HookEventRequest{
+	hookEvent := &agentv1.ProcessHookEventRequest{
 		SessionId: s.sessionID,
 		Agent:     s.agentName,
 		HookEvent: req.HookEvent,
