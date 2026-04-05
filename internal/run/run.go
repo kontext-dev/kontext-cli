@@ -43,34 +43,24 @@ func Start(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintf(os.Stderr, "✓ Authenticated as %s\n", identity)
 
-	// 2. Check for env template
+	// 2. Parse env template (optional — launch without credentials if missing)
 	templatePath := opts.TemplateFile
+	var resolved []credential.Resolved
+
 	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "\nNo %s found.\n\n", templatePath)
-		fmt.Fprintln(os.Stderr, "To configure providers, create a .env.kontext file:")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintln(os.Stderr, "  GITHUB_TOKEN={{kontext:github}}")
-		fmt.Fprintln(os.Stderr, "  STRIPE_KEY={{kontext:stripe}}")
-		fmt.Fprintln(os.Stderr, "  DATABASE_URL={{kontext:postgres}}")
-		fmt.Fprintln(os.Stderr, "")
-		fmt.Fprintf(os.Stderr, "Or manage providers at: %s/dashboard/settings\n", opts.IssuerURL)
-		return fmt.Errorf("no env template found — create %s to get started", templatePath)
-	}
+		fmt.Fprintln(os.Stderr, "  No .env.kontext — launching without credential injection")
+	} else {
+		entries, err := credential.ParseTemplate(templatePath)
+		if err != nil {
+			return fmt.Errorf("parse template: %w", err)
+		}
 
-	// 3. Parse template
-	entries, err := credential.ParseTemplate(templatePath)
-	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
-	}
-
-	if len(entries) == 0 {
-		fmt.Fprintln(os.Stderr, "⚠ No credential placeholders in template — launching without credential injection")
-	}
-
-	// 4. Resolve credentials
-	resolved, err := resolveCredentials(ctx, session, entries)
-	if err != nil {
-		return err
+		if len(entries) > 0 {
+			resolved, err = resolveCredentials(ctx, session, entries)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	// 5. Build environment
