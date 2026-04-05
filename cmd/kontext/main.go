@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kontext-dev/kontext-cli/internal/auth"
+	"github.com/kontext-dev/kontext-cli/internal/run"
 
 	// Register agent adapters
 	_ "github.com/kontext-dev/kontext-cli/internal/agent/claude"
@@ -35,30 +36,25 @@ func main() {
 func startCmd() *cobra.Command {
 	var (
 		agentName    string
-		user         string
 		templateFile string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "start",
+		Use:   "start [flags] [-- extra-agent-args...]",
 		Short: "Launch an agent with Kontext governance",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintf(os.Stderr, "kontext start --agent %s (not yet implemented)\n", agentName)
-			// TODO:
-			// 1. Load session from keyring
-			// 2. Connect to backend via gRPC (CreateSession)
-			// 3. Parse env template, resolve credentials (ExchangeCredential)
-			// 4. Start sidecar on Unix socket
-			// 5. Generate agent hook config pointing to `kontext hook`
-			// 6. Launch agent subprocess with injected env
-			// 7. Stream hook events via sidecar → backend (ProcessHookEvent)
-			// 8. On exit: EndSession, cleanup
-			return nil
+			ctx := context.Background()
+			return run.Start(ctx, run.Options{
+				Agent:        agentName,
+				TemplateFile: templateFile,
+				IssuerURL:    auth.DefaultIssuerURL,
+				ClientID:     auth.DefaultClientID,
+				Args:         args,
+			})
 		},
 	}
 
 	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent to launch (claude, cursor, codex)")
-	cmd.Flags().StringVar(&user, "user", "", "Developer identity (email)")
 	cmd.Flags().StringVar(&templateFile, "env-template", ".env.kontext", "Path to env template file")
 
 	return cmd
