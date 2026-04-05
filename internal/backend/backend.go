@@ -73,23 +73,21 @@ func envOr(key, fallback string) string {
 
 // Client wraps the ConnectRPC AgentService client with token management.
 type Client struct {
-	rpc    agentv1connect.AgentServiceClient
-	config *Config
-	token  string
-	tokenExp time.Time
-	mu     sync.Mutex
+	rpc           agentv1connect.AgentServiceClient
+	config        *Config
+	token         string
+	tokenExp      time.Time
+	tokenEndpoint string
+	mu            sync.Mutex
 }
 
 // NewClient creates a ConnectRPC client for the Kontext AgentService.
 func NewClient(config *Config) *Client {
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-
 	c := &Client{config: config}
 
-	// Wrap the HTTP client with an auth interceptor
 	authClient := &http.Client{
 		Timeout:   30 * time.Second,
-		Transport: &authTransport{client: c, base: httpClient.Transport},
+		Transport: &authTransport{client: c, base: http.DefaultTransport},
 	}
 
 	c.rpc = agentv1connect.NewAgentServiceClient(
@@ -153,22 +151,14 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 		return c.token, nil
 	}
 
-	// Discover token endpoint
-	resp, err := http.Get(c.config.BaseURL + "/.well-known/oauth-authorization-server")
+	// Discover token endpoint (cached after first call)
+	tokenEndpoint, err := c.discoverTokenEndpoint(ctx)
 	if err != nil {
-		return "", fmt.Errorf("discovery: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var meta struct {
-		TokenEndpoint string `json:"token_endpoint"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		return "", fmt.Errorf("decode discovery: %w", err)
+		return "", err
 	}
 
 	// Client credentials flow
-	req, err := http.NewRequestWithContext(ctx, "POST", meta.TokenEndpoint,
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenEndpoint,
 		strings.NewReader("grant_type=client_credentials&scope=management:all+mcp:invoke"))
 	if err != nil {
 		return "", err
@@ -195,13 +185,41 @@ func (c *Client) getToken(ctx context.Context) (string, error) {
 	}
 
 	c.token = tokenData.AccessToken
-	if tokenData.ExpiresIn > 0 {
-		c.tokenExp = time.Now().Add(time.Duration(tokenData.ExpiresIn-60) * time.Second)
-	} else {
-		c.tokenExp = time.Now().Add(50 * time.Minute)
+	bufferSec := tokenData.ExpiresIn - 60
+	if bufferSec < 10 {
+		bufferSec = 10
 	}
+	c.tokenExp = time.Now().Add(time.Duration(bufferSec) * time.Second)
 
 	return c.token, nil
+}
+
+func (c *Client) discoverTokenEndpoint(ctx context.Context) (string, error) {
+	if c.tokenEndpoint != "" {
+		return c.tokenEndpoint, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET",
+		c.config.BaseURL+"/.well-known/oauth-authorization-server", nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("discovery: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var meta struct {
+		TokenEndpoint string `json:"token_endpoint"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+		return "", fmt.Errorf("decode discovery: %w", err)
+	}
+
+	c.tokenEndpoint = meta.TokenEndpoint
+	return c.tokenEndpoint, nil
 }
 
 // authTransport injects the bearer token into every request.

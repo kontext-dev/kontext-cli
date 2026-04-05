@@ -9,12 +9,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/cli/browser"
-	"github.com/google/uuid"
 
 	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-dev/kontext-cli/internal/auth"
@@ -67,7 +67,7 @@ func Start(ctx context.Context, opts Options) error {
 		Cwd:      cwd,
 		ClientInfo: map[string]string{
 			"name": "kontext-cli",
-			"os":   fmt.Sprintf("%s", os.Getenv("GOOS")),
+			"os":   runtime.GOOS,
 		},
 	})
 	if err != nil {
@@ -79,13 +79,11 @@ func Start(ctx context.Context, opts Options) error {
 	sessionID := createResp.SessionId
 	fmt.Fprintf(os.Stderr, "✓ Session: %s (%s)\n", createResp.SessionName, sessionID[:8])
 
-	traceID := uuid.New().String()
-
 	// 4. Start sidecar
 	sessionDir := filepath.Join(os.TempDir(), "kontext", sessionID)
 	os.MkdirAll(sessionDir, 0700)
 
-	sc, err := sidecar.New(sessionDir, client, sessionID, traceID, opts.Agent)
+	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent)
 	if err != nil {
 		return fmt.Errorf("sidecar: %w", err)
 	}
@@ -123,11 +121,9 @@ func Start(ctx context.Context, opts Options) error {
 
 	// 8. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
-	startTime := time.Now()
 	agentErr := launchAgentWithSettings(ctx, opts.Agent, env, opts.Args, settingsPath)
 
-	// 9. Teardown
-	_ = time.Since(startTime)
+	// 9. Teardown (always runs, even on non-zero agent exit)
 	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -135,6 +131,13 @@ func Start(ctx context.Context, opts Options) error {
 	fmt.Fprintf(os.Stderr, "\n✓ Session ended (%s)\n", sessionID[:8])
 
 	os.RemoveAll(sessionDir)
+
+	// Propagate agent exit code
+	if agentErr != nil {
+		if exitErr, ok := agentErr.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+	}
 	return agentErr
 }
 
@@ -156,44 +159,6 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 	}
 
 	return result.Session, nil
-}
-
-// initTemplate interactively creates a .env.kontext on first run.
-func initTemplate(path string) error {
-	providers := []struct {
-		Name   string
-		EnvVar string
-		Handle string
-	}{
-		{"GitHub", "GITHUB_TOKEN", "github"},
-		{"Google Workspace", "GOOGLE_TOKEN", "google-workspace"},
-		{"Stripe", "STRIPE_KEY", "stripe"},
-		{"Linear", "LINEAR_API_KEY", "linear"},
-		{"Slack", "SLACK_TOKEN", "slack"},
-		{"PostgreSQL", "DATABASE_URL", "postgres"},
-	}
-
-	fmt.Fprintln(os.Stderr, "\nNo .env.kontext found. Which providers does this project need?")
-	reader := bufio.NewReader(os.Stdin)
-
-	var lines []string
-	for _, p := range providers {
-		fmt.Fprintf(os.Stderr, "  %s? [y/N] ", p.Name)
-		input, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(input)) == "y" {
-			lines = append(lines, fmt.Sprintf("%s={{kontext:%s}}", p.EnvVar, p.Handle))
-		}
-	}
-
-	if len(lines) == 0 {
-		lines = append(lines, "# Add providers: VAR_NAME={{kontext:provider-handle}}")
-	}
-
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	fmt.Fprintf(os.Stderr, "✓ Wrote %s\n\n", path)
-	return nil
 }
 
 // resolveCredentials exchanges each template entry for a live credential.
@@ -279,14 +244,9 @@ func launchAgentWithSettings(_ context.Context, agentName string, env, extraArgs
 
 	err = cmd.Wait()
 	signal.Stop(sigCh)
+	close(sigCh)
 
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			os.Exit(exitErr.ExitCode())
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
 func filterArgs(args []string) []string {

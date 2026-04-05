@@ -111,7 +111,7 @@ Session lifecycle and tool call events flow to the Kontext backend. This powers 
 | `hook.post_tool_call` | PostToolUse hook | After every tool execution |
 | `hook.user_prompt` | UserPromptSubmit hook | User submits a prompt |
 
-Events are ingested to the `mcp_events` table via `POST /api/v1/mcp-events`. Each session gets a `traceId` for grouping events in the traces view.
+Events are streamed to the backend via the ConnectRPC `ProcessHookEvent` bidirectional stream and stored in the `mcp_events` table.
 
 **What governance telemetry captures:**
 - What the agent tried to do (tool name + input)

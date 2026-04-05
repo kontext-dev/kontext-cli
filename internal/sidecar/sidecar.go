@@ -20,18 +20,16 @@ type Server struct {
 	socketPath string
 	listener   net.Listener
 	sessionID  string
-	traceID    string
 	agentName  string
 	client     *backend.Client
 	cancel     context.CancelFunc
 }
 
 // New creates a new sidecar server.
-func New(sessionDir string, client *backend.Client, sessionID, traceID, agentName string) (*Server, error) {
+func New(sessionDir string, client *backend.Client, sessionID, agentName string) (*Server, error) {
 	return &Server{
 		socketPath: filepath.Join(sessionDir, "kontext.sock"),
 		sessionID:  sessionID,
-		traceID:    traceID,
 		agentName:  agentName,
 		client:     client,
 	}, nil
