@@ -1,0 +1,11 @@
+version: v2
+inputs:
+  - git_repo: https://github.com/kontext-dev/proto.git
+    branch: main
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-connect-go
+    out: gen
+    opt: paths=source_relative
