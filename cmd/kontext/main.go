@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/kontext-dev/kontext-cli/internal/agent"
 	"github.com/kontext-dev/kontext-cli/internal/auth"
+	"github.com/kontext-dev/kontext-cli/internal/hook"
 	"github.com/kontext-dev/kontext-cli/internal/run"
+	"github.com/kontext-dev/kontext-cli/internal/sidecar"
 
 	// Register agent adapters
 	_ "github.com/kontext-dev/kontext-cli/internal/agent/claude"
@@ -97,17 +103,76 @@ func hookCmd() *cobra.Command {
 		Short:  "Process a hook event (called by the agent, not by users)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(os.Stderr, "kontext hook (not yet implemented)")
-			// TODO:
-			// 1. Read stdin (hook event JSON)
-			// 2. Connect to sidecar via KONTEXT_SOCKET
-			// 3. Send event, receive decision
-			// 4. Write decision to stdout, exit with appropriate code
-			return nil
+			a, ok := agent.Get(agentName)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "unknown agent: %s\n", agentName)
+				os.Exit(2)
+			}
+
+			socketPath := os.Getenv("KONTEXT_SOCKET")
+			if socketPath == "" {
+				// No sidecar — fail-open
+				hook.Run(a, func(e *agent.HookEvent) (bool, string, error) {
+					return true, "no sidecar", nil
+				})
+				return nil // unreachable
+			}
+
+			hook.Run(a, func(e *agent.HookEvent) (bool, string, error) {
+				return evaluateViaSidecar(socketPath, agentName, e)
+			})
+			return nil // unreachable (hook.Run calls os.Exit)
 		},
 	}
 
 	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent type")
 
 	return cmd
+}
+
+func evaluateViaSidecar(socketPath, agentName string, e *agent.HookEvent) (bool, string, error) {
+	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
+	if err != nil {
+		// Sidecar unreachable — fail-open
+		return true, "sidecar unreachable", nil
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	req := sidecar.EvaluateRequest{
+		Type:      "evaluate",
+		Agent:     agentName,
+		HookEvent: e.HookEventName,
+		ToolName:  e.ToolName,
+		ToolUseID: e.ToolUseID,
+		CWD:       e.CWD,
+	}
+
+	// Marshal tool input/response to JSON
+	if e.ToolInput != nil {
+		data, _ := marshalJSON(e.ToolInput)
+		req.ToolInput = data
+	}
+	if e.ToolResponse != nil {
+		data, _ := marshalJSON(e.ToolResponse)
+		req.ToolResponse = data
+	}
+
+	if err := sidecar.WriteMessage(conn, req); err != nil {
+		return true, "sidecar write error", nil
+	}
+
+	var result sidecar.EvaluateResult
+	if err := sidecar.ReadMessage(conn, &result); err != nil {
+		return true, "sidecar read error", nil
+	}
+
+	return result.Allowed, result.Reason, nil
+}
+
+func marshalJSON(v any) ([]byte, error) {
+	if v == nil {
+		return nil, nil
+	}
+	return json.Marshal(v)
 }

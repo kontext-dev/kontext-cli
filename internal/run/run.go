@@ -1,5 +1,4 @@
 // Package run implements the `kontext start` orchestrator.
-// It handles the full lifecycle: auth → init → credentials → sidecar → subprocess → cleanup.
 package run
 
 import (
@@ -9,13 +8,19 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cli/browser"
+	"github.com/google/uuid"
 
 	"github.com/kontext-dev/kontext-cli/internal/auth"
+	"github.com/kontext-dev/kontext-cli/internal/backend"
 	"github.com/kontext-dev/kontext-cli/internal/credential"
+	"github.com/kontext-dev/kontext-cli/internal/sidecar"
 )
 
 // Options configures a kontext start run.
@@ -24,12 +29,12 @@ type Options struct {
 	TemplateFile string
 	IssuerURL    string
 	ClientID     string
-	Args         []string // extra args to pass to the agent
+	Args         []string
 }
 
 // Start is the main entry point for `kontext start`.
 func Start(ctx context.Context, opts Options) error {
-	// 1. Auth — login inline if no session
+	// 1. Auth
 	session, err := ensureSession(ctx, opts.IssuerURL, opts.ClientID)
 	if err != nil {
 		return err
@@ -43,34 +48,105 @@ func Start(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintf(os.Stderr, "✓ Authenticated as %s\n", identity)
 
-	// 2. Ensure env template exists (create interactively on first run)
-	templatePath := opts.TemplateFile
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		if err := initTemplate(templatePath); err != nil {
-			return err
-		}
-	}
-
-	// 3. Parse template and resolve credentials
-	var resolved []credential.Resolved
-	entries, err := credential.ParseTemplate(templatePath)
+	// 2. Backend client
+	backendCfg, err := backend.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
+		fmt.Fprintf(os.Stderr, "⚠ Backend not configured: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  Launching without telemetry (set KONTEXT_CLIENT_ID + KONTEXT_CLIENT_SECRET)")
+		return launchAgentDirect(ctx, opts)
+	}
+	client := backend.NewRESTBridgeClient(backendCfg)
+
+	// 3. Create session
+	hostname, _ := os.Hostname()
+	cwd, _ := os.Getwd()
+	sessionID, sessionName, err := client.CreateSession(ctx, identity, opts.Agent, hostname, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ Session creation failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  Launching without telemetry")
+		return launchAgentDirect(ctx, opts)
+	}
+	fmt.Fprintf(os.Stderr, "✓ Session: %s (%s)\n", sessionName, sessionID[:8])
+
+	traceID := uuid.New().String()
+
+	// Ingest session.begin event
+	client.IngestEvent(ctx, &backend.IngestEventParams{
+		SessionID: sessionID,
+		EventType: "session.begin",
+		Status:    "ok",
+		TraceID:   traceID,
+		RequestJSON: map[string]string{
+			"agent":    opts.Agent,
+			"hostname": hostname,
+			"cwd":      cwd,
+			"os":       runtime.GOOS,
+		},
+	})
+
+	// 4. Start sidecar
+	sessionDir := filepath.Join(os.TempDir(), "kontext", sessionID)
+	os.MkdirAll(sessionDir, 0700)
+
+	sc, err := sidecar.New(sessionDir, client, sessionID, traceID)
+	if err != nil {
+		return fmt.Errorf("sidecar: %w", err)
+	}
+	if err := sc.Start(ctx); err != nil {
+		return fmt.Errorf("sidecar start: %w", err)
+	}
+	defer sc.Stop()
+
+	// 5. Generate hook settings
+	kontextBin, _ := os.Executable()
+	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
+	if err != nil {
+		return fmt.Errorf("generate settings: %w", err)
 	}
 
-	if len(entries) > 0 {
-		resolved, err = resolveCredentials(ctx, session, entries)
+	// 6. Env template + credentials (optional)
+	var resolved []credential.Resolved
+	if _, err := os.Stat(opts.TemplateFile); err == nil {
+		entries, err := credential.ParseTemplate(opts.TemplateFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse template: %w", err)
+		}
+		if len(entries) > 0 {
+			resolved, err = resolveCredentials(ctx, session, entries)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	// 5. Build environment
+	// 7. Build env
 	env := buildEnv(resolved)
+	env = append(env, "KONTEXT_SOCKET="+sc.SocketPath())
+	env = append(env, "KONTEXT_SESSION_ID="+sessionID)
 
-	// 6. Launch agent
+	// 8. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
-	return launchAgent(ctx, opts.Agent, env, opts.Args)
+	startTime := time.Now()
+	agentErr := launchAgentWithSettings(ctx, opts.Agent, env, opts.Args, settingsPath)
+
+	// 9. Teardown
+	duration := int(time.Since(startTime).Milliseconds())
+	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client.IngestEvent(endCtx, &backend.IngestEventParams{
+		SessionID:  sessionID,
+		EventType:  "session.end",
+		Status:     "ok",
+		DurationMs: duration,
+		TraceID:    traceID,
+	})
+	client.EndSession(endCtx, sessionID)
+
+	fmt.Fprintf(os.Stderr, "\n✓ Session ended (%s)\n", sessionID[:8])
+
+	os.RemoveAll(sessionDir)
+	return agentErr
 }
 
 // ensureSession loads the session or triggers an interactive login.
@@ -92,7 +168,6 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 
 	return result.Session, nil
 }
-
 
 // initTemplate interactively creates a .env.kontext on first run.
 func initTemplate(path string) error {
@@ -122,7 +197,6 @@ func initTemplate(path string) error {
 	}
 
 	if len(lines) == 0 {
-		// Write an empty template so it doesn't prompt again
 		lines = append(lines, "# Add providers: VAR_NAME={{kontext:provider-handle}}")
 	}
 
@@ -135,10 +209,6 @@ func initTemplate(path string) error {
 
 // resolveCredentials exchanges each template entry for a live credential.
 func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry) ([]credential.Resolved, error) {
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	var resolved []credential.Resolved
 
@@ -147,21 +217,15 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 
 		value, err := exchangeCredential(ctx, session, entry)
 		if err != nil {
-			// Check if this is a "not connected" error — prompt to connect
 			if isNotConnectedError(err) {
 				fmt.Fprintln(os.Stderr, "not connected")
 				fmt.Fprintf(os.Stderr, "  Opening browser to connect %s...\n", entry.Provider)
-
 				connectURL := fmt.Sprintf("%s/connect/%s", auth.DefaultIssuerURL, entry.Provider)
 				_ = browser.OpenURL(connectURL)
-
 				fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
 				bufio.NewReader(os.Stdin).ReadString('\n')
-
-				// Retry
 				value, err = exchangeCredential(ctx, session, entry)
 			}
-
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "⚠ skipped (%v)\n", err)
 				continue
@@ -175,10 +239,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	return resolved, nil
 }
 
-// exchangeCredential calls the Kontext backend to resolve a single credential.
-// TODO: Replace with actual gRPC ExchangeCredential call.
 func exchangeCredential(_ context.Context, _ *auth.Session, _ credential.Entry) (string, error) {
-	// Placeholder — will be wired to gRPC ExchangeCredential RPC
 	return "", fmt.Errorf("credential exchange not yet connected to backend")
 }
 
@@ -187,26 +248,31 @@ func isNotConnectedError(err error) bool {
 		strings.Contains(err.Error(), "provider not found")
 }
 
-// buildEnv constructs the environment for the agent subprocess.
 func buildEnv(resolved []credential.Resolved) []string {
-	// Pass through the parent environment + add Kontext session indicator +
-	// overlay resolved credentials. In the future, this should be tightened
-	// to a minimal allowlist to prevent leaking existing secrets.
 	env := append(os.Environ(), "KONTEXT_RUN=1")
 	return credential.BuildEnv(resolved, env)
 }
 
-// launchAgent spawns the agent as a subprocess with the given environment.
-func launchAgent(_ context.Context, agentName string, env []string, extraArgs []string) error {
-	binary, err := exec.LookPath(agentName)
+// launchAgentDirect launches the agent without hooks or sidecar (fallback).
+func launchAgentDirect(ctx context.Context, opts Options) error {
+	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
+	return launchAgentWithSettings(ctx, opts.Agent, os.Environ(), opts.Args, "")
+}
+
+// launchAgentWithSettings spawns the agent with optional --settings flag.
+func launchAgentWithSettings(_ context.Context, agentName string, env, extraArgs []string, settingsPath string) error {
+	binaryPath, err := exec.LookPath(agentName)
 	if err != nil {
 		return fmt.Errorf("agent %q not found in PATH: %w", agentName, err)
 	}
 
-	// Filter out dangerous flags that could bypass governance
-	filtered := filterArgs(extraArgs)
+	var args []string
+	if settingsPath != "" {
+		args = append(args, "--settings", settingsPath)
+	}
+	args = append(args, filterArgs(extraArgs)...)
 
-	cmd := exec.Command(binary, filtered...)
+	cmd := exec.Command(binaryPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -216,7 +282,6 @@ func launchAgent(_ context.Context, agentName string, env []string, extraArgs []
 		return fmt.Errorf("launch %s: %w", agentName, err)
 	}
 
-	// Forward signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -237,28 +302,16 @@ func launchAgent(_ context.Context, agentName string, env []string, extraArgs []
 	return nil
 }
 
-// filterArgs removes flags that could bypass governance.
 func filterArgs(args []string) []string {
 	blocked := map[string]bool{
-		"--bare":                          true,
-		"--dangerously-skip-permissions":  true,
-		"--settings":                      true,
-		"--setting-sources":               true,
+		"--bare":                         true,
+		"--dangerously-skip-permissions": true,
 	}
 
 	var filtered []string
-	skip := false
 	for _, arg := range args {
-		if skip {
-			skip = false
-			continue
-		}
 		if blocked[arg] {
 			fmt.Fprintf(os.Stderr, "⚠ Stripped blocked flag: %s\n", arg)
-			// If this flag takes a value, skip the next arg too
-			if arg == "--settings" || arg == "--setting-sources" {
-				skip = true
-			}
 			continue
 		}
 		filtered = append(filtered, arg)
