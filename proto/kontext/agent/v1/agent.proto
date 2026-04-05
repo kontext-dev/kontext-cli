@@ -1,0 +1,141 @@
+syntax = "proto3";
+
+package kontext.agent.v1;
+
+option go_package = "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1;agentv1";
+
+// AgentService is the bidirectional streaming service between the CLI sidecar
+// and the Kontext backend. The sidecar maintains a persistent connection and
+// streams hook events for policy evaluation and telemetry.
+service AgentService {
+  // ProcessHookEvent streams tool call events from the CLI to the backend
+  // and receives policy decisions in return. Bidirectional streaming keeps
+  // the connection open for the session lifetime — no per-hook HTTP overhead.
+  rpc ProcessHookEvent(stream HookEventRequest) returns (stream HookEventResponse);
+
+  // CreateSession establishes a governed agent session. Called once at the
+  // start of `kontext start`. Returns session context used for all subsequent
+  // hook evaluations.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // Heartbeat keeps the session alive. The sidecar sends heartbeats on an
+  // interval; the backend marks sessions as disconnected if heartbeats stop.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // EndSession terminates the session and revokes any ephemeral credentials.
+  rpc EndSession(EndSessionRequest) returns (EndSessionResponse);
+
+  // ExchangeCredential resolves a provider credential for a given user and
+  // provider handle. Used by the env template hydration and per-tool-call
+  // credential injection.
+  rpc ExchangeCredential(ExchangeCredentialRequest) returns (ExchangeCredentialResponse);
+
+  // SyncPolicy streams the current policy state for the session's org/agent.
+  // The sidecar caches this locally for fast hook evaluation. The server
+  // pushes updates when policy changes.
+  rpc SyncPolicy(SyncPolicyRequest) returns (stream PolicyUpdate);
+}
+
+// --- Hook Events ---
+
+message HookEventRequest {
+  string session_id = 1;
+  string agent = 2; // "claude", "cursor", "codex"
+  string hook_event = 3; // "PreToolUse", "PostToolUse", "UserPromptSubmit"
+  string tool_name = 4;
+  bytes tool_input = 5; // JSON-encoded tool input
+  bytes tool_response = 6; // JSON-encoded tool response (PostToolUse only)
+  string tool_use_id = 7;
+  string cwd = 8;
+}
+
+message HookEventResponse {
+  Decision decision = 1;
+  string reason = 2;
+  string event_id = 3;
+  // Credential to inject for this tool call (if applicable)
+  CredentialInjection credential = 4;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_DENY = 2;
+  DECISION_ASK = 3; // Prompt user for approval
+}
+
+message CredentialInjection {
+  string provider = 1;
+  map<string, string> env_vars = 2; // e.g., {"GITHUB_TOKEN": "gho_..."}
+}
+
+// --- Sessions ---
+
+message CreateSessionRequest {
+  string user_id = 1;
+  string agent = 2; // "claude", "cursor", "codex"
+  string hostname = 3;
+  string cwd = 4;
+  map<string, string> client_info = 5;
+}
+
+message CreateSessionResponse {
+  string session_id = 1;
+  string session_name = 2;
+  string organization_id = 3;
+  string agent_id = 4;
+}
+
+message HeartbeatRequest {
+  string session_id = 1;
+}
+
+message HeartbeatResponse {}
+
+message EndSessionRequest {
+  string session_id = 1;
+}
+
+message EndSessionResponse {}
+
+// --- Credentials ---
+
+message ExchangeCredentialRequest {
+  string provider = 1; // e.g., "github", "stripe", "postgres"
+  string user_id = 2;
+  string resource = 3; // optional: specific resource URI
+}
+
+message ExchangeCredentialResponse {
+  string provider = 1;
+  CredentialKind kind = 2;
+  string access_token = 3; // for OAuth providers
+  string value = 4; // for API key providers
+  string token_type = 5;
+  string scope = 6;
+  int64 expires_in = 7; // seconds
+}
+
+enum CredentialKind {
+  CREDENTIAL_KIND_UNSPECIFIED = 0;
+  CREDENTIAL_KIND_OAUTH = 1;
+  CREDENTIAL_KIND_KEY = 2;
+}
+
+// --- Policy Sync ---
+
+message SyncPolicyRequest {
+  string session_id = 1;
+}
+
+message PolicyUpdate {
+  // OpenFGA tuples for local evaluation
+  repeated PolicyTuple tuples = 1;
+  bool full_sync = 2; // true = replace all, false = incremental
+}
+
+message PolicyTuple {
+  string user = 1;
+  string relation = 2;
+  string object = 3;
+}

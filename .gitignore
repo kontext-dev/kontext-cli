@@ -1,3 +1,4 @@
-node_modules
-dist
-*.map
+bin/
+dist/
+gen/
+*.exe

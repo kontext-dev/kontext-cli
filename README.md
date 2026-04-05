@@ -1,105 +1,106 @@
 # Kontext CLI
 
-Governed agent sessions for Claude Code. Wraps Claude Code with [Kontext](https://kontext.security) hooks for telemetry and policy enforcement.
+Governed agent sessions for Claude Code, Cursor, and other AI agents. One command to run any agent with scoped credentials and policy enforcement.
 
 ## How it works
 
-`kontext start` launches Claude Code with governance hooks injected via Claude Code's native hook system. Every tool call (Bash, Edit, Write, MCP) is reported to the Kontext API as a telemetry event. The developer interacts with Claude Code normally — the hooks run transparently in the background.
+```bash
+kontext start --agent claude
+```
 
-```
-kontext start
-  ├── Authenticate (service account credentials)
-  ├── Create agent session
-  ├── Generate hooks-only settings.json
-  ├── Spawn Claude Code with hooks
-  │     ├── PreToolUse  → POST /agent-sessions/:id/evaluate-tool (telemetry)
-  │     └── PostToolUse → POST /agent-sessions/:id/evaluate-tool (async telemetry)
-  └── On exit: disconnect session, clean up
-```
+1. **Authenticates** — loads your identity from the system keyring (set up via `kontext login`)
+2. **Resolves credentials** — reads `.env.kontext`, exchanges placeholders for short-lived tokens via Kontext
+3. **Launches the agent** — spawns Claude Code with credentials injected as env vars
+4. **Enforces policy** — every tool call is evaluated against your org's OpenFGA policy (via a local sidecar)
+5. **Logs everything** — full audit trail streamed to the Kontext backend via gRPC
+
+Credentials are ephemeral — scoped to the session, gone when it ends.
 
 ## Install
 
 ```bash
-npm install -g @kontext-dev/cli
+brew install kontext-dev/tap/kontext
 ```
 
-Or link locally from source:
+Or build from source:
 
 ```bash
-pnpm install && pnpm build
-ln -sf "$(pwd)/dist/bin.mjs" ~/.local/bin/kontext
+go build -o bin/kontext ./cmd/kontext
 ```
 
 ## Usage
 
-### Quick start
-
-```bash
-export KONTEXT_CLIENT_ID=<your-client-id>
-export KONTEXT_CLIENT_SECRET=<your-client-secret>
-export KONTEXT_API_URL=https://api.kontext.security
-
-kontext start
-```
-
-Claude Code launches with Kontext hooks active. Tool calls are logged to your Kontext dashboard.
-
-### Commands
-
-#### `kontext start`
-
-Launch Claude Code with governance hooks.
-
-```bash
-kontext start                          # basic
-kontext start --user sara@acme.com     # explicit developer identity
-kontext start --api-url https://...    # override API URL
-kontext start -- --model sonnet        # pass args through to Claude Code
-```
-
-**Environment variables:**
-
-| Variable | Required | Description |
-|---|---|---|
-| `KONTEXT_CLIENT_ID` | Yes | Application or service account client ID |
-| `KONTEXT_CLIENT_SECRET` | Yes | Application or service account client secret |
-| `KONTEXT_API_URL` | No | Kontext API base URL (default: `https://api.kontext.security`) |
-
-#### `kontext login`
-
-Authenticate with Kontext via browser (PKCE flow).
+### First-time setup
 
 ```bash
 kontext login
-kontext login --api-url https://api.staging.kontext.security
 ```
 
-#### `kontext hook`
+Opens a browser for OIDC authentication. Stores your refresh token in the system keyring (macOS Keychain / Linux secret service). No client IDs or secrets to manage.
 
-Internal hook handlers invoked by Claude Code. Not meant to be called directly.
+### Declare credentials
+
+Create a `.env.kontext` file in your project:
+
+```
+GITHUB_TOKEN={{kontext:github}}
+STRIPE_KEY={{kontext:stripe}}
+DATABASE_URL={{kontext:postgres/prod-readonly}}
+```
+
+### Run
 
 ```bash
-kontext hook pre-tool-use    # PreToolUse hook (reads stdin, writes stdout)
-kontext hook post-tool-use   # PostToolUse hook (async, reads stdin)
+kontext start --agent claude
 ```
+
+The CLI resolves each placeholder, injects the credentials as env vars, and launches Claude Code with governance hooks active.
+
+### Supported agents
+
+| Agent | Flag | Status |
+|---|---|---|
+| Claude Code | `--agent claude` | Active |
+| Cursor | `--agent cursor` | Planned |
+| Codex | `--agent codex` | Planned |
 
 ## Architecture
 
-The CLI generates a hooks-only `settings.json` that Claude Code loads alongside existing user/project settings. No interference with your permissions, tool allowlists, or MCP configs.
+```
+kontext start --agent claude
+  │
+  ├── Auth: OIDC refresh token from keyring → ephemeral session token
+  ├── Credentials: .env.kontext → ExchangeCredential RPC → env vars
+  ├── Sidecar: Unix socket server for hook ↔ backend communication
+  ├── Agent: spawn claude with injected env + hook config
+  │     │
+  │     ├── [PreToolUse]  → hook binary → sidecar → policy eval → allow/deny
+  │     └── [PostToolUse] → hook binary → sidecar → audit log
+  │
+  └── Backend: bidirectional gRPC stream (ProcessHookEvent, SyncPolicy)
+```
 
-**PreToolUse hooks** fire on `Bash|Edit|Write|mcp__.*` tool calls. They call the Kontext API to log the event. In the current MVP, all calls are allowed (telemetry-only). Policy enforcement (blocking via exit code 2) is planned.
+**Hook handlers** are the compiled `kontext hook` binary — <5ms startup, communicates with the sidecar over a Unix socket. No per-hook HTTP requests.
 
-**PostToolUse hooks** fire on all tool calls with `async: true`, so they never block Claude Code. They log the completed tool call including the response.
+**Policy evaluation** uses OpenFGA tuples cached locally by the sidecar. The backend streams policy updates in real-time via `SyncPolicy`.
 
-Session state is written to a temp file (`/tmp/kontext/session-<pid>/`) and passed to hook subcommands via the `KONTEXT_SESSION_FILE` environment variable. The session is cleaned up on exit.
+## Protocol
+
+Service definitions: [`proto/kontext/agent/v1/agent.proto`](proto/kontext/agent/v1/agent.proto)
+
+Uses [ConnectRPC](https://connectrpc.com/) (gRPC-compatible) for backend communication.
 
 ## Development
 
 ```bash
-pnpm install
-pnpm build          # build to dist/bin.mjs
-pnpm check-types    # type check
-pnpm lint           # eslint
+# Build
+go build -o bin/kontext ./cmd/kontext
+
+# Generate protobuf (requires buf)
+buf generate
+
+# Test
+go test ./...
 ```
 
 ## License
