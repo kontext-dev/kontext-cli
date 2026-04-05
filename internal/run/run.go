@@ -129,11 +129,11 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 
 				// Retry
 				value, err = exchangeCredential(ctx, session, entry)
-				if err != nil {
-					return nil, fmt.Errorf("credential exchange for %s failed after connect: %w", entry.Provider, err)
-				}
-			} else {
-				return nil, fmt.Errorf("credential exchange for %s: %w", entry.Provider, err)
+			}
+
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "⚠ skipped (%v)\n", err)
+				continue
 			}
 		}
 
