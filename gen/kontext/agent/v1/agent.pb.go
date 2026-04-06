@@ -73,55 +73,6 @@ func (Decision) EnumDescriptor() ([]byte, []int) {
 	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{0}
 }
 
-type CredentialKind int32
-
-const (
-	CredentialKind_CREDENTIAL_KIND_UNSPECIFIED CredentialKind = 0
-	CredentialKind_CREDENTIAL_KIND_OAUTH       CredentialKind = 1
-	CredentialKind_CREDENTIAL_KIND_KEY         CredentialKind = 2
-)
-
-// Enum value maps for CredentialKind.
-var (
-	CredentialKind_name = map[int32]string{
-		0: "CREDENTIAL_KIND_UNSPECIFIED",
-		1: "CREDENTIAL_KIND_OAUTH",
-		2: "CREDENTIAL_KIND_KEY",
-	}
-	CredentialKind_value = map[string]int32{
-		"CREDENTIAL_KIND_UNSPECIFIED": 0,
-		"CREDENTIAL_KIND_OAUTH":       1,
-		"CREDENTIAL_KIND_KEY":         2,
-	}
-)
-
-func (x CredentialKind) Enum() *CredentialKind {
-	p := new(CredentialKind)
-	*p = x
-	return p
-}
-
-func (x CredentialKind) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (CredentialKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_kontext_agent_v1_agent_proto_enumTypes[1].Descriptor()
-}
-
-func (CredentialKind) Type() protoreflect.EnumType {
-	return &file_kontext_agent_v1_agent_proto_enumTypes[1]
-}
-
-func (x CredentialKind) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use CredentialKind.Descriptor instead.
-func (CredentialKind) EnumDescriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{1}
-}
-
 type ProcessHookEventRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -223,12 +174,10 @@ func (x *ProcessHookEventRequest) GetCwd() string {
 }
 
 type ProcessHookEventResponse struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Decision Decision               `protobuf:"varint,1,opt,name=decision,proto3,enum=kontext.agent.v1.Decision" json:"decision,omitempty"`
-	Reason   string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	EventId  string                 `protobuf:"bytes,3,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	// Credential to inject for this tool call (if applicable)
-	Credential    *CredentialInjection `protobuf:"bytes,4,opt,name=credential,proto3" json:"credential,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Decision      Decision               `protobuf:"varint,1,opt,name=decision,proto3,enum=kontext.agent.v1.Decision" json:"decision,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	EventId       string                 `protobuf:"bytes,3,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -284,65 +233,6 @@ func (x *ProcessHookEventResponse) GetEventId() string {
 	return ""
 }
 
-func (x *ProcessHookEventResponse) GetCredential() *CredentialInjection {
-	if x != nil {
-		return x.Credential
-	}
-	return nil
-}
-
-type CredentialInjection struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
-	EnvVars       map[string]string      `protobuf:"bytes,2,rep,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // e.g., {"GITHUB_TOKEN": "gho_..."}
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CredentialInjection) Reset() {
-	*x = CredentialInjection{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CredentialInjection) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CredentialInjection) ProtoMessage() {}
-
-func (x *CredentialInjection) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CredentialInjection.ProtoReflect.Descriptor instead.
-func (*CredentialInjection) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *CredentialInjection) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
-func (x *CredentialInjection) GetEnvVars() map[string]string {
-	if x != nil {
-		return x.EnvVars
-	}
-	return nil
-}
-
 type CreateSessionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -356,7 +246,7 @@ type CreateSessionRequest struct {
 
 func (x *CreateSessionRequest) Reset() {
 	*x = CreateSessionRequest{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[3]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -368,7 +258,7 @@ func (x *CreateSessionRequest) String() string {
 func (*CreateSessionRequest) ProtoMessage() {}
 
 func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[3]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -381,7 +271,7 @@ func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
 func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CreateSessionRequest) GetUserId() string {
@@ -431,7 +321,7 @@ type CreateSessionResponse struct {
 
 func (x *CreateSessionResponse) Reset() {
 	*x = CreateSessionResponse{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[4]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -443,7 +333,7 @@ func (x *CreateSessionResponse) String() string {
 func (*CreateSessionResponse) ProtoMessage() {}
 
 func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[4]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -456,7 +346,7 @@ func (x *CreateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSessionResponse.ProtoReflect.Descriptor instead.
 func (*CreateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CreateSessionResponse) GetSessionId() string {
@@ -496,7 +386,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +398,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,7 +411,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HeartbeatRequest) GetSessionId() string {
@@ -539,7 +429,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[6]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +441,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[6]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +454,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 type EndSessionRequest struct {
@@ -576,7 +466,7 @@ type EndSessionRequest struct {
 
 func (x *EndSessionRequest) Reset() {
 	*x = EndSessionRequest{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[7]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -588,7 +478,7 @@ func (x *EndSessionRequest) String() string {
 func (*EndSessionRequest) ProtoMessage() {}
 
 func (x *EndSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[7]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -601,7 +491,7 @@ func (x *EndSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndSessionRequest.ProtoReflect.Descriptor instead.
 func (*EndSessionRequest) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EndSessionRequest) GetSessionId() string {
@@ -619,7 +509,7 @@ type EndSessionResponse struct {
 
 func (x *EndSessionResponse) Reset() {
 	*x = EndSessionResponse{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[8]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -631,7 +521,7 @@ func (x *EndSessionResponse) String() string {
 func (*EndSessionResponse) ProtoMessage() {}
 
 func (x *EndSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[8]
+	mi := &file_kontext_agent_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -644,316 +534,7 @@ func (x *EndSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndSessionResponse.ProtoReflect.Descriptor instead.
 func (*EndSessionResponse) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{8}
-}
-
-type ExchangeCredentialRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"` // e.g., "github", "stripe", "postgres"
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Resource      string                 `protobuf:"bytes,3,opt,name=resource,proto3" json:"resource,omitempty"` // optional: specific resource URI
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExchangeCredentialRequest) Reset() {
-	*x = ExchangeCredentialRequest{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[9]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExchangeCredentialRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExchangeCredentialRequest) ProtoMessage() {}
-
-func (x *ExchangeCredentialRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[9]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExchangeCredentialRequest.ProtoReflect.Descriptor instead.
-func (*ExchangeCredentialRequest) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{9}
-}
-
-func (x *ExchangeCredentialRequest) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialRequest) GetUserId() string {
-	if x != nil {
-		return x.UserId
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialRequest) GetResource() string {
-	if x != nil {
-		return x.Resource
-	}
-	return ""
-}
-
-type ExchangeCredentialResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
-	Kind          CredentialKind         `protobuf:"varint,2,opt,name=kind,proto3,enum=kontext.agent.v1.CredentialKind" json:"kind,omitempty"`
-	AccessToken   string                 `protobuf:"bytes,3,opt,name=access_token,json=accessToken,proto3" json:"access_token,omitempty"` // for OAuth providers
-	Value         string                 `protobuf:"bytes,4,opt,name=value,proto3" json:"value,omitempty"`                                // for API key providers
-	TokenType     string                 `protobuf:"bytes,5,opt,name=token_type,json=tokenType,proto3" json:"token_type,omitempty"`
-	Scope         string                 `protobuf:"bytes,6,opt,name=scope,proto3" json:"scope,omitempty"`
-	ExpiresIn     int64                  `protobuf:"varint,7,opt,name=expires_in,json=expiresIn,proto3" json:"expires_in,omitempty"` // seconds
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExchangeCredentialResponse) Reset() {
-	*x = ExchangeCredentialResponse{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[10]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExchangeCredentialResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExchangeCredentialResponse) ProtoMessage() {}
-
-func (x *ExchangeCredentialResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[10]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExchangeCredentialResponse.ProtoReflect.Descriptor instead.
-func (*ExchangeCredentialResponse) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{10}
-}
-
-func (x *ExchangeCredentialResponse) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialResponse) GetKind() CredentialKind {
-	if x != nil {
-		return x.Kind
-	}
-	return CredentialKind_CREDENTIAL_KIND_UNSPECIFIED
-}
-
-func (x *ExchangeCredentialResponse) GetAccessToken() string {
-	if x != nil {
-		return x.AccessToken
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialResponse) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialResponse) GetTokenType() string {
-	if x != nil {
-		return x.TokenType
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialResponse) GetScope() string {
-	if x != nil {
-		return x.Scope
-	}
-	return ""
-}
-
-func (x *ExchangeCredentialResponse) GetExpiresIn() int64 {
-	if x != nil {
-		return x.ExpiresIn
-	}
-	return 0
-}
-
-type SyncPolicyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SyncPolicyRequest) Reset() {
-	*x = SyncPolicyRequest{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[11]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncPolicyRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncPolicyRequest) ProtoMessage() {}
-
-func (x *SyncPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[11]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncPolicyRequest.ProtoReflect.Descriptor instead.
-func (*SyncPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{11}
-}
-
-func (x *SyncPolicyRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-type SyncPolicyResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// OpenFGA tuples for local evaluation
-	Tuples        []*PolicyTuple `protobuf:"bytes,1,rep,name=tuples,proto3" json:"tuples,omitempty"`
-	FullSync      bool           `protobuf:"varint,2,opt,name=full_sync,json=fullSync,proto3" json:"full_sync,omitempty"` // true = replace all, false = incremental
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SyncPolicyResponse) Reset() {
-	*x = SyncPolicyResponse{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SyncPolicyResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SyncPolicyResponse) ProtoMessage() {}
-
-func (x *SyncPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SyncPolicyResponse.ProtoReflect.Descriptor instead.
-func (*SyncPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *SyncPolicyResponse) GetTuples() []*PolicyTuple {
-	if x != nil {
-		return x.Tuples
-	}
-	return nil
-}
-
-func (x *SyncPolicyResponse) GetFullSync() bool {
-	if x != nil {
-		return x.FullSync
-	}
-	return false
-}
-
-type PolicyTuple struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	User          string                 `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
-	Relation      string                 `protobuf:"bytes,2,opt,name=relation,proto3" json:"relation,omitempty"`
-	Object        string                 `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PolicyTuple) Reset() {
-	*x = PolicyTuple{}
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PolicyTuple) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PolicyTuple) ProtoMessage() {}
-
-func (x *PolicyTuple) ProtoReflect() protoreflect.Message {
-	mi := &file_kontext_agent_v1_agent_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PolicyTuple.ProtoReflect.Descriptor instead.
-func (*PolicyTuple) Descriptor() ([]byte, []int) {
-	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *PolicyTuple) GetUser() string {
-	if x != nil {
-		return x.User
-	}
-	return ""
-}
-
-func (x *PolicyTuple) GetRelation() string {
-	if x != nil {
-		return x.Relation
-	}
-	return ""
-}
-
-func (x *PolicyTuple) GetObject() string {
-	if x != nil {
-		return x.Object
-	}
-	return ""
+	return file_kontext_agent_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 var File_kontext_agent_v1_agent_proto protoreflect.FileDescriptor
@@ -972,20 +553,11 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"tool_input\x18\x05 \x01(\fR\ttoolInput\x12#\n" +
 	"\rtool_response\x18\x06 \x01(\fR\ftoolResponse\x12\x1e\n" +
 	"\vtool_use_id\x18\a \x01(\tR\ttoolUseId\x12\x10\n" +
-	"\x03cwd\x18\b \x01(\tR\x03cwd\"\xcc\x01\n" +
+	"\x03cwd\x18\b \x01(\tR\x03cwd\"\x85\x01\n" +
 	"\x18ProcessHookEventResponse\x126\n" +
 	"\bdecision\x18\x01 \x01(\x0e2\x1a.kontext.agent.v1.DecisionR\bdecision\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
-	"\bevent_id\x18\x03 \x01(\tR\aeventId\x12E\n" +
-	"\n" +
-	"credential\x18\x04 \x01(\v2%.kontext.agent.v1.CredentialInjectionR\n" +
-	"credential\"\xbc\x01\n" +
-	"\x13CredentialInjection\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\x12M\n" +
-	"\benv_vars\x18\x02 \x03(\v22.kontext.agent.v1.CredentialInjection.EnvVarsEntryR\aenvVars\x1a:\n" +
-	"\fEnvVarsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8b\x02\n" +
+	"\bevent_id\x18\x03 \x01(\tR\aeventId\"\x8b\x02\n" +
 	"\x14CreateSessionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05agent\x18\x02 \x01(\tR\x05agent\x12\x1a\n" +
@@ -1009,49 +581,18 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\x11EndSessionRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\"\x14\n" +
-	"\x12EndSessionResponse\"l\n" +
-	"\x19ExchangeCredentialRequest\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1a\n" +
-	"\bresource\x18\x03 \x01(\tR\bresource\"\xfb\x01\n" +
-	"\x1aExchangeCredentialResponse\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\x124\n" +
-	"\x04kind\x18\x02 \x01(\x0e2 .kontext.agent.v1.CredentialKindR\x04kind\x12!\n" +
-	"\faccess_token\x18\x03 \x01(\tR\vaccessToken\x12\x14\n" +
-	"\x05value\x18\x04 \x01(\tR\x05value\x12\x1d\n" +
-	"\n" +
-	"token_type\x18\x05 \x01(\tR\ttokenType\x12\x14\n" +
-	"\x05scope\x18\x06 \x01(\tR\x05scope\x12\x1d\n" +
-	"\n" +
-	"expires_in\x18\a \x01(\x03R\texpiresIn\"2\n" +
-	"\x11SyncPolicyRequest\x12\x1d\n" +
-	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"h\n" +
-	"\x12SyncPolicyResponse\x125\n" +
-	"\x06tuples\x18\x01 \x03(\v2\x1d.kontext.agent.v1.PolicyTupleR\x06tuples\x12\x1b\n" +
-	"\tfull_sync\x18\x02 \x01(\bR\bfullSync\"U\n" +
-	"\vPolicyTuple\x12\x12\n" +
-	"\x04user\x18\x01 \x01(\tR\x04user\x12\x1a\n" +
-	"\brelation\x18\x02 \x01(\tR\brelation\x12\x16\n" +
-	"\x06object\x18\x03 \x01(\tR\x06object*]\n" +
+	"\x12EndSessionResponse*]\n" +
 	"\bDecision\x12\x18\n" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDECISION_ALLOW\x10\x01\x12\x11\n" +
 	"\rDECISION_DENY\x10\x02\x12\x10\n" +
-	"\fDECISION_ASK\x10\x03*e\n" +
-	"\x0eCredentialKind\x12\x1f\n" +
-	"\x1bCREDENTIAL_KIND_UNSPECIFIED\x10\x00\x12\x19\n" +
-	"\x15CREDENTIAL_KIND_OAUTH\x10\x01\x12\x17\n" +
-	"\x13CREDENTIAL_KIND_KEY\x10\x022\xda\x04\n" +
+	"\fDECISION_ASK\x10\x032\x8e\x03\n" +
 	"\fAgentService\x12m\n" +
 	"\x10ProcessHookEvent\x12).kontext.agent.v1.ProcessHookEventRequest\x1a*.kontext.agent.v1.ProcessHookEventResponse(\x010\x01\x12`\n" +
 	"\rCreateSession\x12&.kontext.agent.v1.CreateSessionRequest\x1a'.kontext.agent.v1.CreateSessionResponse\x12T\n" +
 	"\tHeartbeat\x12\".kontext.agent.v1.HeartbeatRequest\x1a#.kontext.agent.v1.HeartbeatResponse\x12W\n" +
 	"\n" +
-	"EndSession\x12#.kontext.agent.v1.EndSessionRequest\x1a$.kontext.agent.v1.EndSessionResponse\x12o\n" +
-	"\x12ExchangeCredential\x12+.kontext.agent.v1.ExchangeCredentialRequest\x1a,.kontext.agent.v1.ExchangeCredentialResponse\x12Y\n" +
-	"\n" +
-	"SyncPolicy\x12#.kontext.agent.v1.SyncPolicyRequest\x1a$.kontext.agent.v1.SyncPolicyResponse0\x01B\xc5\x01\n" +
+	"EndSession\x12#.kontext.agent.v1.EndSessionRequest\x1a$.kontext.agent.v1.EndSessionResponseB\xc5\x01\n" +
 	"\x14com.kontext.agent.v1B\n" +
 	"AgentProtoP\x01Z?github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1;agentv1\xa2\x02\x03KAX\xaa\x02\x10Kontext.Agent.V1\xca\x02\x10Kontext\\Agent\\V1\xe2\x02\x1cKontext\\Agent\\V1\\GPBMetadata\xea\x02\x12Kontext::Agent::V1b\x06proto3"
 
@@ -1067,52 +608,36 @@ func file_kontext_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_kontext_agent_v1_agent_proto_rawDescData
 }
 
-var file_kontext_agent_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kontext_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_kontext_agent_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kontext_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_kontext_agent_v1_agent_proto_goTypes = []any{
-	(Decision)(0),                      // 0: kontext.agent.v1.Decision
-	(CredentialKind)(0),                // 1: kontext.agent.v1.CredentialKind
-	(*ProcessHookEventRequest)(nil),    // 2: kontext.agent.v1.ProcessHookEventRequest
-	(*ProcessHookEventResponse)(nil),   // 3: kontext.agent.v1.ProcessHookEventResponse
-	(*CredentialInjection)(nil),        // 4: kontext.agent.v1.CredentialInjection
-	(*CreateSessionRequest)(nil),       // 5: kontext.agent.v1.CreateSessionRequest
-	(*CreateSessionResponse)(nil),      // 6: kontext.agent.v1.CreateSessionResponse
-	(*HeartbeatRequest)(nil),           // 7: kontext.agent.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),          // 8: kontext.agent.v1.HeartbeatResponse
-	(*EndSessionRequest)(nil),          // 9: kontext.agent.v1.EndSessionRequest
-	(*EndSessionResponse)(nil),         // 10: kontext.agent.v1.EndSessionResponse
-	(*ExchangeCredentialRequest)(nil),  // 11: kontext.agent.v1.ExchangeCredentialRequest
-	(*ExchangeCredentialResponse)(nil), // 12: kontext.agent.v1.ExchangeCredentialResponse
-	(*SyncPolicyRequest)(nil),          // 13: kontext.agent.v1.SyncPolicyRequest
-	(*SyncPolicyResponse)(nil),         // 14: kontext.agent.v1.SyncPolicyResponse
-	(*PolicyTuple)(nil),                // 15: kontext.agent.v1.PolicyTuple
-	nil,                                // 16: kontext.agent.v1.CredentialInjection.EnvVarsEntry
-	nil,                                // 17: kontext.agent.v1.CreateSessionRequest.ClientInfoEntry
+	(Decision)(0),                    // 0: kontext.agent.v1.Decision
+	(*ProcessHookEventRequest)(nil),  // 1: kontext.agent.v1.ProcessHookEventRequest
+	(*ProcessHookEventResponse)(nil), // 2: kontext.agent.v1.ProcessHookEventResponse
+	(*CreateSessionRequest)(nil),     // 3: kontext.agent.v1.CreateSessionRequest
+	(*CreateSessionResponse)(nil),    // 4: kontext.agent.v1.CreateSessionResponse
+	(*HeartbeatRequest)(nil),         // 5: kontext.agent.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),        // 6: kontext.agent.v1.HeartbeatResponse
+	(*EndSessionRequest)(nil),        // 7: kontext.agent.v1.EndSessionRequest
+	(*EndSessionResponse)(nil),       // 8: kontext.agent.v1.EndSessionResponse
+	nil,                              // 9: kontext.agent.v1.CreateSessionRequest.ClientInfoEntry
 }
 var file_kontext_agent_v1_agent_proto_depIdxs = []int32{
-	0,  // 0: kontext.agent.v1.ProcessHookEventResponse.decision:type_name -> kontext.agent.v1.Decision
-	4,  // 1: kontext.agent.v1.ProcessHookEventResponse.credential:type_name -> kontext.agent.v1.CredentialInjection
-	16, // 2: kontext.agent.v1.CredentialInjection.env_vars:type_name -> kontext.agent.v1.CredentialInjection.EnvVarsEntry
-	17, // 3: kontext.agent.v1.CreateSessionRequest.client_info:type_name -> kontext.agent.v1.CreateSessionRequest.ClientInfoEntry
-	1,  // 4: kontext.agent.v1.ExchangeCredentialResponse.kind:type_name -> kontext.agent.v1.CredentialKind
-	15, // 5: kontext.agent.v1.SyncPolicyResponse.tuples:type_name -> kontext.agent.v1.PolicyTuple
-	2,  // 6: kontext.agent.v1.AgentService.ProcessHookEvent:input_type -> kontext.agent.v1.ProcessHookEventRequest
-	5,  // 7: kontext.agent.v1.AgentService.CreateSession:input_type -> kontext.agent.v1.CreateSessionRequest
-	7,  // 8: kontext.agent.v1.AgentService.Heartbeat:input_type -> kontext.agent.v1.HeartbeatRequest
-	9,  // 9: kontext.agent.v1.AgentService.EndSession:input_type -> kontext.agent.v1.EndSessionRequest
-	11, // 10: kontext.agent.v1.AgentService.ExchangeCredential:input_type -> kontext.agent.v1.ExchangeCredentialRequest
-	13, // 11: kontext.agent.v1.AgentService.SyncPolicy:input_type -> kontext.agent.v1.SyncPolicyRequest
-	3,  // 12: kontext.agent.v1.AgentService.ProcessHookEvent:output_type -> kontext.agent.v1.ProcessHookEventResponse
-	6,  // 13: kontext.agent.v1.AgentService.CreateSession:output_type -> kontext.agent.v1.CreateSessionResponse
-	8,  // 14: kontext.agent.v1.AgentService.Heartbeat:output_type -> kontext.agent.v1.HeartbeatResponse
-	10, // 15: kontext.agent.v1.AgentService.EndSession:output_type -> kontext.agent.v1.EndSessionResponse
-	12, // 16: kontext.agent.v1.AgentService.ExchangeCredential:output_type -> kontext.agent.v1.ExchangeCredentialResponse
-	14, // 17: kontext.agent.v1.AgentService.SyncPolicy:output_type -> kontext.agent.v1.SyncPolicyResponse
-	12, // [12:18] is the sub-list for method output_type
-	6,  // [6:12] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	0, // 0: kontext.agent.v1.ProcessHookEventResponse.decision:type_name -> kontext.agent.v1.Decision
+	9, // 1: kontext.agent.v1.CreateSessionRequest.client_info:type_name -> kontext.agent.v1.CreateSessionRequest.ClientInfoEntry
+	1, // 2: kontext.agent.v1.AgentService.ProcessHookEvent:input_type -> kontext.agent.v1.ProcessHookEventRequest
+	3, // 3: kontext.agent.v1.AgentService.CreateSession:input_type -> kontext.agent.v1.CreateSessionRequest
+	5, // 4: kontext.agent.v1.AgentService.Heartbeat:input_type -> kontext.agent.v1.HeartbeatRequest
+	7, // 5: kontext.agent.v1.AgentService.EndSession:input_type -> kontext.agent.v1.EndSessionRequest
+	2, // 6: kontext.agent.v1.AgentService.ProcessHookEvent:output_type -> kontext.agent.v1.ProcessHookEventResponse
+	4, // 7: kontext.agent.v1.AgentService.CreateSession:output_type -> kontext.agent.v1.CreateSessionResponse
+	6, // 8: kontext.agent.v1.AgentService.Heartbeat:output_type -> kontext.agent.v1.HeartbeatResponse
+	8, // 9: kontext.agent.v1.AgentService.EndSession:output_type -> kontext.agent.v1.EndSessionResponse
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_kontext_agent_v1_agent_proto_init() }
@@ -1125,8 +650,8 @@ func file_kontext_agent_v1_agent_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kontext_agent_v1_agent_proto_rawDesc), len(file_kontext_agent_v1_agent_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   16,
+			NumEnums:      1,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

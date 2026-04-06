@@ -1,15 +1,13 @@
 // Package backend provides the ConnectRPC client for the Kontext AgentService.
+// Authenticates with the user's OIDC bearer token from `kontext login`.
+// No client secrets, no client_credentials grant.
 package backend
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
-	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -18,84 +16,29 @@ import (
 	"github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1/agentv1connect"
 )
 
-// Config holds backend connection parameters.
-type Config struct {
-	BaseURL      string `json:"baseUrl"`
-	ClientID     string `json:"clientId"`
-	ClientSecret string `json:"clientSecret"`
+// Client wraps the ConnectRPC AgentService client.
+type Client struct {
+	rpc agentv1connect.AgentServiceClient
 }
 
-// LoadConfig reads backend configuration from env vars or ~/.kontext/config.json.
-func LoadConfig() (*Config, error) {
-	cfg := &Config{
-		BaseURL:      envOr("KONTEXT_API_URL", "https://api.kontext.security"),
-		ClientID:     os.Getenv("KONTEXT_CLIENT_ID"),
-		ClientSecret: os.Getenv("KONTEXT_CLIENT_SECRET"),
+// NewClient creates a ConnectRPC client authenticated with the user's bearer token.
+func NewClient(baseURL, accessToken string) *Client {
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &bearerTransport{token: accessToken, base: http.DefaultTransport},
 	}
 
-	if cfg.ClientID == "" || cfg.ClientSecret == "" {
-		if fileCfg, err := loadConfigFile(); err == nil && fileCfg != nil {
-			if cfg.ClientID == "" {
-				cfg.ClientID = fileCfg.ClientID
-			}
-			if cfg.ClientSecret == "" {
-				cfg.ClientSecret = fileCfg.ClientSecret
-			}
-		}
+	return &Client{
+		rpc: agentv1connect.NewAgentServiceClient(httpClient, baseURL),
 	}
-
-	if cfg.ClientID == "" || cfg.ClientSecret == "" {
-		return nil, fmt.Errorf("KONTEXT_CLIENT_ID and KONTEXT_CLIENT_SECRET required (set via env or ~/.kontext/config.json)")
-	}
-
-	return cfg, nil
 }
 
-func loadConfigFile() (*Config, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".kontext", "config.json"))
-	if err != nil {
-		return nil, err
-	}
-	var cfg Config
-	return &cfg, json.Unmarshal(data, &cfg)
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
+// BaseURL returns the API base URL from env or default.
+func BaseURL() string {
+	if v := os.Getenv("KONTEXT_API_URL"); v != "" {
 		return v
 	}
-	return fallback
-}
-
-// Client wraps the ConnectRPC AgentService client with token management.
-type Client struct {
-	rpc           agentv1connect.AgentServiceClient
-	config        *Config
-	token         string
-	tokenExp      time.Time
-	tokenEndpoint string
-	mu            sync.Mutex
-}
-
-// NewClient creates a ConnectRPC client for the Kontext AgentService.
-func NewClient(config *Config) *Client {
-	c := &Client{config: config}
-
-	authClient := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &authTransport{client: c, base: http.DefaultTransport},
-	}
-
-	c.rpc = agentv1connect.NewAgentServiceClient(
-		authClient,
-		config.BaseURL,
-	)
-
-	return c
+	return "https://api.kontext.security"
 }
 
 // CreateSession creates a governed agent session.
@@ -123,121 +66,28 @@ func (c *Client) EndSession(ctx context.Context, sessionID string) error {
 	return err
 }
 
-// IngestEvent sends a single hook event to the backend.
+// IngestEvent sends a single hook event via the ProcessHookEvent stream.
 func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error {
 	stream := c.rpc.ProcessHookEvent(ctx)
 	if err := stream.Send(req); err != nil {
 		return fmt.Errorf("send hook event: %w", err)
 	}
-	// For now, send one event per stream. The sidecar will hold a persistent
-	// stream open once the full bidirectional flow is wired.
 	if err := stream.CloseRequest(); err != nil {
 		return err
 	}
-	// Read the response
 	if resp, err := stream.Receive(); err == nil {
-		_ = resp // decision logged server-side
+		_ = resp
 	}
 	return stream.CloseResponse()
 }
 
-// --- Token management ---
-
-func (c *Client) getToken(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.token != "" && time.Now().Before(c.tokenExp) {
-		return c.token, nil
-	}
-
-	// Discover token endpoint (cached after first call)
-	tokenEndpoint, err := c.discoverTokenEndpoint(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	// Client credentials flow
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenEndpoint,
-		strings.NewReader("grant_type=client_credentials&scope=management:all+mcp:invoke"))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth(c.config.ClientID, c.config.ClientSecret)
-
-	tokenResp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer tokenResp.Body.Close()
-
-	if tokenResp.StatusCode != 200 {
-		return "", fmt.Errorf("token request: %s", tokenResp.Status)
-	}
-
-	var tokenData struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
-	if err := json.NewDecoder(tokenResp.Body).Decode(&tokenData); err != nil {
-		return "", err
-	}
-
-	c.token = tokenData.AccessToken
-	bufferSec := tokenData.ExpiresIn - 60
-	if bufferSec < 10 {
-		bufferSec = 10
-	}
-	c.tokenExp = time.Now().Add(time.Duration(bufferSec) * time.Second)
-
-	return c.token, nil
+// bearerTransport injects the user's OIDC token into every request.
+type bearerTransport struct {
+	token string
+	base  http.RoundTripper
 }
 
-func (c *Client) discoverTokenEndpoint(ctx context.Context) (string, error) {
-	if c.tokenEndpoint != "" {
-		return c.tokenEndpoint, nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		c.config.BaseURL+"/.well-known/oauth-authorization-server", nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("discovery: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var meta struct {
-		TokenEndpoint string `json:"token_endpoint"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		return "", fmt.Errorf("decode discovery: %w", err)
-	}
-
-	c.tokenEndpoint = meta.TokenEndpoint
-	return c.tokenEndpoint, nil
-}
-
-// authTransport injects the bearer token into every request.
-type authTransport struct {
-	client *Client
-	base   http.RoundTripper
-}
-
-func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	token, err := t.client.getToken(req.Context())
-	if err != nil {
-		return nil, fmt.Errorf("auth: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	return base.RoundTrip(req)
+func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(req)
 }

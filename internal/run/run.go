@@ -48,14 +48,8 @@ func Start(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintf(os.Stderr, "✓ Authenticated as %s\n", identity)
 
-	// 2. Backend client (native ConnectRPC)
-	backendCfg, err := backend.LoadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠ Backend not configured: %v\n", err)
-		fmt.Fprintln(os.Stderr, "  Launching without telemetry (set KONTEXT_CLIENT_ID + KONTEXT_CLIENT_SECRET)")
-		return launchAgentDirect(ctx, opts)
-	}
-	client := backend.NewClient(backendCfg)
+	// 2. Backend client — authenticated with the user's OIDC token
+	client := backend.NewClient(backend.BaseURL(), session.AccessToken)
 
 	// 3. Create session via ConnectRPC
 	hostname, _ := os.Hostname()
@@ -72,7 +66,7 @@ func Start(ctx context.Context, opts Options) error {
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠ Session creation failed: %v\n", err)
-		fmt.Fprintln(os.Stderr, "  Launching without telemetry")
+		fmt.Fprintln(os.Stderr, "  Launching without telemetry (backend may not support ConnectRPC yet)")
 		return launchAgentDirect(ctx, opts)
 	}
 

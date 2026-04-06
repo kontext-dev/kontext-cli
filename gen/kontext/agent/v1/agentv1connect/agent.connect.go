@@ -43,36 +43,22 @@ const (
 	AgentServiceHeartbeatProcedure = "/kontext.agent.v1.AgentService/Heartbeat"
 	// AgentServiceEndSessionProcedure is the fully-qualified name of the AgentService's EndSession RPC.
 	AgentServiceEndSessionProcedure = "/kontext.agent.v1.AgentService/EndSession"
-	// AgentServiceExchangeCredentialProcedure is the fully-qualified name of the AgentService's
-	// ExchangeCredential RPC.
-	AgentServiceExchangeCredentialProcedure = "/kontext.agent.v1.AgentService/ExchangeCredential"
-	// AgentServiceSyncPolicyProcedure is the fully-qualified name of the AgentService's SyncPolicy RPC.
-	AgentServiceSyncPolicyProcedure = "/kontext.agent.v1.AgentService/SyncPolicy"
 )
 
 // AgentServiceClient is a client for the kontext.agent.v1.AgentService service.
 type AgentServiceClient interface {
 	// ProcessHookEvent streams tool call events from the CLI to the backend
 	// and receives policy decisions in return. Bidirectional streaming keeps
-	// the connection open for the session lifetime — no per-hook HTTP overhead.
+	// the connection open for the session lifetime.
 	ProcessHookEvent(context.Context) *connect.BidiStreamForClient[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]
 	// CreateSession establishes a governed agent session. Called once at the
-	// start of `kontext start`. Returns session context used for all subsequent
-	// hook evaluations.
+	// start of `kontext start`.
 	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error)
 	// Heartbeat keeps the session alive. The sidecar sends heartbeats on an
 	// interval; the backend marks sessions as disconnected if heartbeats stop.
 	Heartbeat(context.Context, *connect.Request[v1.HeartbeatRequest]) (*connect.Response[v1.HeartbeatResponse], error)
-	// EndSession terminates the session and revokes any ephemeral credentials.
+	// EndSession terminates the session.
 	EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.EndSessionResponse], error)
-	// ExchangeCredential resolves a provider credential for a given user and
-	// provider handle. Used by the env template hydration and per-tool-call
-	// credential injection.
-	ExchangeCredential(context.Context, *connect.Request[v1.ExchangeCredentialRequest]) (*connect.Response[v1.ExchangeCredentialResponse], error)
-	// SyncPolicy streams the current policy state for the session's org/agent.
-	// The sidecar caches this locally for fast hook evaluation. The server
-	// pushes updates when policy changes.
-	SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest]) (*connect.ServerStreamForClient[v1.SyncPolicyResponse], error)
 }
 
 // NewAgentServiceClient constructs a client for the kontext.agent.v1.AgentService service. By
@@ -110,29 +96,15 @@ func NewAgentServiceClient(httpClient connect.HTTPClient, baseURL string, opts .
 			connect.WithSchema(agentServiceMethods.ByName("EndSession")),
 			connect.WithClientOptions(opts...),
 		),
-		exchangeCredential: connect.NewClient[v1.ExchangeCredentialRequest, v1.ExchangeCredentialResponse](
-			httpClient,
-			baseURL+AgentServiceExchangeCredentialProcedure,
-			connect.WithSchema(agentServiceMethods.ByName("ExchangeCredential")),
-			connect.WithClientOptions(opts...),
-		),
-		syncPolicy: connect.NewClient[v1.SyncPolicyRequest, v1.SyncPolicyResponse](
-			httpClient,
-			baseURL+AgentServiceSyncPolicyProcedure,
-			connect.WithSchema(agentServiceMethods.ByName("SyncPolicy")),
-			connect.WithClientOptions(opts...),
-		),
 	}
 }
 
 // agentServiceClient implements AgentServiceClient.
 type agentServiceClient struct {
-	processHookEvent   *connect.Client[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]
-	createSession      *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
-	heartbeat          *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
-	endSession         *connect.Client[v1.EndSessionRequest, v1.EndSessionResponse]
-	exchangeCredential *connect.Client[v1.ExchangeCredentialRequest, v1.ExchangeCredentialResponse]
-	syncPolicy         *connect.Client[v1.SyncPolicyRequest, v1.SyncPolicyResponse]
+	processHookEvent *connect.Client[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]
+	createSession    *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
+	heartbeat        *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
+	endSession       *connect.Client[v1.EndSessionRequest, v1.EndSessionResponse]
 }
 
 // ProcessHookEvent calls kontext.agent.v1.AgentService.ProcessHookEvent.
@@ -155,39 +127,20 @@ func (c *agentServiceClient) EndSession(ctx context.Context, req *connect.Reques
 	return c.endSession.CallUnary(ctx, req)
 }
 
-// ExchangeCredential calls kontext.agent.v1.AgentService.ExchangeCredential.
-func (c *agentServiceClient) ExchangeCredential(ctx context.Context, req *connect.Request[v1.ExchangeCredentialRequest]) (*connect.Response[v1.ExchangeCredentialResponse], error) {
-	return c.exchangeCredential.CallUnary(ctx, req)
-}
-
-// SyncPolicy calls kontext.agent.v1.AgentService.SyncPolicy.
-func (c *agentServiceClient) SyncPolicy(ctx context.Context, req *connect.Request[v1.SyncPolicyRequest]) (*connect.ServerStreamForClient[v1.SyncPolicyResponse], error) {
-	return c.syncPolicy.CallServerStream(ctx, req)
-}
-
 // AgentServiceHandler is an implementation of the kontext.agent.v1.AgentService service.
 type AgentServiceHandler interface {
 	// ProcessHookEvent streams tool call events from the CLI to the backend
 	// and receives policy decisions in return. Bidirectional streaming keeps
-	// the connection open for the session lifetime — no per-hook HTTP overhead.
+	// the connection open for the session lifetime.
 	ProcessHookEvent(context.Context, *connect.BidiStream[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]) error
 	// CreateSession establishes a governed agent session. Called once at the
-	// start of `kontext start`. Returns session context used for all subsequent
-	// hook evaluations.
+	// start of `kontext start`.
 	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error)
 	// Heartbeat keeps the session alive. The sidecar sends heartbeats on an
 	// interval; the backend marks sessions as disconnected if heartbeats stop.
 	Heartbeat(context.Context, *connect.Request[v1.HeartbeatRequest]) (*connect.Response[v1.HeartbeatResponse], error)
-	// EndSession terminates the session and revokes any ephemeral credentials.
+	// EndSession terminates the session.
 	EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.EndSessionResponse], error)
-	// ExchangeCredential resolves a provider credential for a given user and
-	// provider handle. Used by the env template hydration and per-tool-call
-	// credential injection.
-	ExchangeCredential(context.Context, *connect.Request[v1.ExchangeCredentialRequest]) (*connect.Response[v1.ExchangeCredentialResponse], error)
-	// SyncPolicy streams the current policy state for the session's org/agent.
-	// The sidecar caches this locally for fast hook evaluation. The server
-	// pushes updates when policy changes.
-	SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest], *connect.ServerStream[v1.SyncPolicyResponse]) error
 }
 
 // NewAgentServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -221,18 +174,6 @@ func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(agentServiceMethods.ByName("EndSession")),
 		connect.WithHandlerOptions(opts...),
 	)
-	agentServiceExchangeCredentialHandler := connect.NewUnaryHandler(
-		AgentServiceExchangeCredentialProcedure,
-		svc.ExchangeCredential,
-		connect.WithSchema(agentServiceMethods.ByName("ExchangeCredential")),
-		connect.WithHandlerOptions(opts...),
-	)
-	agentServiceSyncPolicyHandler := connect.NewServerStreamHandler(
-		AgentServiceSyncPolicyProcedure,
-		svc.SyncPolicy,
-		connect.WithSchema(agentServiceMethods.ByName("SyncPolicy")),
-		connect.WithHandlerOptions(opts...),
-	)
 	return "/kontext.agent.v1.AgentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case AgentServiceProcessHookEventProcedure:
@@ -243,10 +184,6 @@ func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOpti
 			agentServiceHeartbeatHandler.ServeHTTP(w, r)
 		case AgentServiceEndSessionProcedure:
 			agentServiceEndSessionHandler.ServeHTTP(w, r)
-		case AgentServiceExchangeCredentialProcedure:
-			agentServiceExchangeCredentialHandler.ServeHTTP(w, r)
-		case AgentServiceSyncPolicyProcedure:
-			agentServiceSyncPolicyHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -270,12 +207,4 @@ func (UnimplementedAgentServiceHandler) Heartbeat(context.Context, *connect.Requ
 
 func (UnimplementedAgentServiceHandler) EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.EndSessionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.EndSession is not implemented"))
-}
-
-func (UnimplementedAgentServiceHandler) ExchangeCredential(context.Context, *connect.Request[v1.ExchangeCredentialRequest]) (*connect.Response[v1.ExchangeCredentialResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.ExchangeCredential is not implemented"))
-}
-
-func (UnimplementedAgentServiceHandler) SyncPolicy(context.Context, *connect.Request[v1.SyncPolicyRequest], *connect.ServerStream[v1.SyncPolicyResponse]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.SyncPolicy is not implemented"))
 }
