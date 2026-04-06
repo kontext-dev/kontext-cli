@@ -175,16 +175,17 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	return resolved, nil
 }
 
-// exchangeCredential calls the Kontext backend to resolve a single credential.
-// TODO: Replace with actual gRPC ExchangeCredential call.
-func exchangeCredential(_ context.Context, _ *auth.Session, _ credential.Entry) (string, error) {
-	// Placeholder — will be wired to gRPC ExchangeCredential RPC
-	return "", fmt.Errorf("credential exchange not yet connected to backend")
+func exchangeCredential(ctx context.Context, session *auth.Session, entry credential.Entry) (string, error) {
+	tokenURL := strings.TrimRight(session.IssuerURL, "/") + "/oauth2/token"
+	result, err := credential.Exchange(ctx, tokenURL, session.AccessToken, entry.Provider)
+	if err != nil {
+		return "", err
+	}
+	return result.AccessToken, nil
 }
 
 func isNotConnectedError(err error) bool {
-	return strings.Contains(err.Error(), "not connected") ||
-		strings.Contains(err.Error(), "provider not found")
+	return credential.IsNotConnected(err)
 }
 
 // buildEnv constructs the environment for the agent subprocess.
