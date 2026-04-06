@@ -11,11 +11,16 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cli/browser"
 
+	"github.com/kontext-dev/kontext-cli/internal/agent"
 	"github.com/kontext-dev/kontext-cli/internal/auth"
 	"github.com/kontext-dev/kontext-cli/internal/credential"
+	"github.com/kontext-dev/kontext-cli/internal/policy"
+	"github.com/kontext-dev/kontext-cli/internal/session"
+	"github.com/kontext-dev/kontext-cli/internal/sidecar"
 )
 
 // Options configures a kontext start run.
@@ -29,21 +34,35 @@ type Options struct {
 
 // Start is the main entry point for `kontext start`.
 func Start(ctx context.Context, opts Options) error {
-	// 1. Auth — login inline if no session
-	session, err := ensureSession(ctx, opts.IssuerURL, opts.ClientID)
+	// 1. Auth
+	sess, err := ensureSession(ctx, opts.IssuerURL, opts.ClientID)
 	if err != nil {
 		return err
 	}
-	identity := session.User.Email
+	identity := sess.User.Email
 	if identity == "" {
-		identity = session.User.Name
+		identity = sess.User.Name
 	}
 	if identity == "" {
 		identity = "authenticated"
 	}
 	fmt.Fprintf(os.Stderr, "✓ Authenticated as %s\n", identity)
 
-	// 2. Ensure env template exists (create interactively on first run)
+	// 2. Create agent session
+	mgr, err := session.Create(ctx, sess.IssuerURL, sess.AccessToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ Agent session: %v (continuing without session tracking)\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "✓ Agent session: %s\n", mgr.ID())
+		heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
+		mgr.StartHeartbeat(heartbeatCtx, 30*time.Second)
+		defer func() {
+			cancelHeartbeat()
+			mgr.Disconnect(context.Background())
+		}()
+	}
+
+	// 3. Ensure env template exists
 	templatePath := opts.TemplateFile
 	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
 		if err := initTemplate(templatePath); err != nil {
@@ -51,24 +70,53 @@ func Start(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// 3. Parse template and resolve credentials
+	// 4. Parse template and resolve credentials
 	var resolved []credential.Resolved
 	entries, err := credential.ParseTemplate(templatePath)
 	if err != nil {
 		return fmt.Errorf("parse template: %w", err)
 	}
-
 	if len(entries) > 0 {
-		resolved, err = resolveCredentials(ctx, session, entries)
+		resolved, err = resolveCredentials(ctx, sess, entries)
 		if err != nil {
 			return err
 		}
 	}
 
-	// 5. Build environment
-	env := buildEnv(resolved)
+	// 5. Start sidecar
+	sessionDir, err := os.MkdirTemp("", "kontext-*")
+	if err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+	defer os.RemoveAll(sessionDir)
 
-	// 6. Launch agent
+	sidecarSrv, err := sidecar.New(sessionDir)
+	if err != nil {
+		return fmt.Errorf("create sidecar: %w", err)
+	}
+
+	engine, err := policy.Fetch(ctx, sess.IssuerURL, sess.AccessToken)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠ Policy fetch: %v (allowing all)\n", err)
+		engine = policy.NewEngine(false, nil)
+	}
+	sidecarSrv.SetEngine(engine)
+
+	auditor := sidecar.NewAuditor(sess.IssuerURL, sess.AccessToken)
+	auditor.Start(ctx)
+	sidecarSrv.SetAuditor(auditor)
+
+	if err := sidecarSrv.Start(ctx); err != nil {
+		return fmt.Errorf("start sidecar: %w", err)
+	}
+	defer sidecarSrv.Stop()
+	fmt.Fprintf(os.Stderr, "✓ Governance sidecar started\n")
+
+	// 6. Build environment
+	env := buildEnv(resolved)
+	env = append(env, "KONTEXT_SOCKET="+sidecarSrv.SocketPath())
+
+	// 7. Launch agent
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
 	return launchAgent(ctx, opts.Agent, env, opts.Args)
 }
@@ -204,10 +252,18 @@ func launchAgent(_ context.Context, agentName string, env []string, extraArgs []
 		return fmt.Errorf("agent %q not found in PATH: %w", agentName, err)
 	}
 
-	// Filter out dangerous flags that could bypass governance
-	filtered := filterArgs(extraArgs)
+	// Get agent adapter for hook settings
+	a, ok := agent.Get(agentName)
+	if !ok {
+		return fmt.Errorf("no adapter registered for agent %q", agentName)
+	}
 
-	cmd := exec.Command(binary, filtered...)
+	// Build args: hook settings first, then filtered user args
+	var args []string
+	args = append(args, a.HookSettings()...)
+	args = append(args, filterArgs(extraArgs)...)
+
+	cmd := exec.Command(binary, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
