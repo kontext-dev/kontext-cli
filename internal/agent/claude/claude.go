@@ -78,3 +78,8 @@ func (c *Claude) EncodeDeny(event *agent.HookEvent, reason string) ([]byte, erro
 	}
 	return json.Marshal(out)
 }
+
+func (c *Claude) HookSettings() []string {
+	settings := `{"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"kontext hook --agent claude"}]}]}}`
+	return []string{"--settings", settings}
+}

@@ -19,6 +19,10 @@ type Agent interface {
 	// EncodeDeny encodes a deny decision in the agent's native output format.
 	// The returned bytes are written to stdout, and the process exits with code 2.
 	EncodeDeny(event *HookEvent, reason string) ([]byte, error)
+
+	// HookSettings returns the agent-specific CLI args to register Kontext as a hook.
+	// Returns a list of args to prepend to the agent command (e.g., ["--settings", "{...}"]).
+	HookSettings() []string
 }
 
 // HookEvent is the normalized representation of a hook event across all agents.
