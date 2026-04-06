@@ -30,7 +30,7 @@ func TestExchange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	result, err := Exchange(context.Background(), srv.URL+"/oauth2/token", "my-access-token", "github")
+	result, err := Exchange(context.Background(), srv.URL+"/oauth2/token", "test-client", "my-access-token", "github")
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestExchangeNotConnected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := Exchange(context.Background(), srv.URL+"/oauth2/token", "my-access-token", "github")
+	_, err := Exchange(context.Background(), srv.URL+"/oauth2/token", "test-client", "my-access-token", "github")
 	if err == nil {
 		t.Fatal("expected error")
 	}

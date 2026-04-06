@@ -34,9 +34,10 @@ func IsNotConnected(err error) bool {
 }
 
 // Exchange performs an RFC 8693 token exchange to get a provider credential.
-func Exchange(ctx context.Context, tokenURL string, accessToken string, provider string) (*ExchangeResult, error) {
+func Exchange(ctx context.Context, tokenURL string, clientID string, accessToken string, provider string) (*ExchangeResult, error) {
 	form := url.Values{
 		"grant_type":         {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"client_id":          {clientID},
 		"subject_token":      {accessToken},
 		"subject_token_type": {"urn:ietf:params:oauth:token-type:access_token"},
 		"resource":           {provider},

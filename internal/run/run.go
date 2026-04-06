@@ -225,7 +225,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 
 func exchangeCredential(ctx context.Context, session *auth.Session, entry credential.Entry) (string, error) {
 	tokenURL := strings.TrimRight(session.IssuerURL, "/") + "/oauth2/token"
-	result, err := credential.Exchange(ctx, tokenURL, session.AccessToken, entry.Provider)
+	result, err := credential.Exchange(ctx, tokenURL, auth.DefaultClientID, session.AccessToken, entry.Provider)
 	if err != nil {
 		return "", err
 	}
