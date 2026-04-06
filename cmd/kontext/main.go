@@ -39,6 +39,7 @@ func startCmd() *cobra.Command {
 	var (
 		agentName    string
 		templateFile string
+		policyFlag   bool
 	)
 
 	cmd := &cobra.Command{
@@ -51,6 +52,7 @@ func startCmd() *cobra.Command {
 				TemplateFile: templateFile,
 				IssuerURL:    auth.DefaultIssuerURL,
 				ClientID:     auth.DefaultClientID,
+				Policy:       policyFlag,
 				Args:         args,
 			})
 		},
@@ -58,6 +60,7 @@ func startCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent to launch (claude, cursor, codex)")
 	cmd.Flags().StringVar(&templateFile, "env-template", ".env.kontext", "Path to env template file")
+	cmd.Flags().BoolVar(&policyFlag, "policy", true, "Enable governance policy enforcement")
 
 	return cmd
 }

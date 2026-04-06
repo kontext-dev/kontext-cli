@@ -29,6 +29,7 @@ type Options struct {
 	TemplateFile string
 	IssuerURL    string
 	ClientID     string
+	Policy       bool     // enable governance policy enforcement
 	Args         []string // extra args to pass to the agent
 }
 
@@ -95,9 +96,14 @@ func Start(ctx context.Context, opts Options) error {
 		return fmt.Errorf("create sidecar: %w", err)
 	}
 
-	engine, err := policy.Fetch(ctx, sess.IssuerURL, sess.APIToken())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "⚠ Policy fetch: %v (allowing all)\n", err)
+	var engine *policy.Engine
+	if opts.Policy {
+		engine, err = policy.Fetch(ctx, sess.IssuerURL, sess.APIToken())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠ Policy fetch: %v (allowing all)\n", err)
+			engine = policy.NewEngine(false, nil)
+		}
+	} else {
 		engine = policy.NewEngine(false, nil)
 	}
 	sidecarSrv.SetEngine(engine)
