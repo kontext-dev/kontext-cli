@@ -7,7 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kontext-dev/kontext-cli/internal/agent"
 	"github.com/kontext-dev/kontext-cli/internal/auth"
+	"github.com/kontext-dev/kontext-cli/internal/hook"
 	"github.com/kontext-dev/kontext-cli/internal/run"
 
 	// Register agent adapters
@@ -97,12 +99,23 @@ func hookCmd() *cobra.Command {
 		Short:  "Process a hook event (called by the agent, not by users)",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(os.Stderr, "kontext hook (not yet implemented)")
-			// TODO:
-			// 1. Read stdin (hook event JSON)
-			// 2. Connect to sidecar via KONTEXT_SOCKET
-			// 3. Send event, receive decision
-			// 4. Write decision to stdout, exit with appropriate code
+			a, ok := agent.Get(agentName)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "kontext: unknown agent: %s\n", agentName)
+				os.Exit(2)
+				return nil
+			}
+
+			socketPath := os.Getenv("KONTEXT_SOCKET")
+			if socketPath == "" {
+				fmt.Fprintln(os.Stderr, "kontext: KONTEXT_SOCKET not set")
+				os.Exit(2)
+				return nil
+			}
+
+			hook.Run(a, func(event *agent.HookEvent) (bool, string, error) {
+				return hook.EvaluateViaSidecar(socketPath, event)
+			})
 			return nil
 		},
 	}
