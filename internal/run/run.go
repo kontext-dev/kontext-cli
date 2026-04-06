@@ -4,7 +4,10 @@ package run
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -187,8 +190,58 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	return resolved, nil
 }
 
-func exchangeCredential(_ context.Context, _ *auth.Session, _ credential.Entry) (string, error) {
-	return "", fmt.Errorf("credential exchange not yet connected to backend")
+// exchangeCredential calls POST /oauth2/token with RFC 8693 token exchange
+// to resolve a provider credential. The user's access token serves as both
+// the subject_token and the Bearer auth — no client secret needed.
+func exchangeCredential(ctx context.Context, session *auth.Session, entry credential.Entry) (string, error) {
+	meta, err := auth.DiscoverEndpoints(ctx, auth.DefaultIssuerURL)
+	if err != nil {
+		return "", fmt.Errorf("oauth discovery: %w", err)
+	}
+
+	form := url.Values{
+		"grant_type":         {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"client_id":          {auth.DefaultClientID},
+		"subject_token":      {session.AccessToken},
+		"subject_token_type": {"urn:ietf:params:oauth:token-type:access_token"},
+		"resource":           {entry.Provider},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", meta.TokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("token exchange request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		AccessToken  string `json:"access_token"`
+		TokenType    string `json:"token_type"`
+		ProviderKind string `json:"provider_kind"`
+		Error        string `json:"error"`
+		ErrorDesc    string `json:"error_description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode token exchange response: %w", err)
+	}
+
+	if result.Error != "" {
+		if result.Error == "invalid_target" && strings.Contains(result.ErrorDesc, "not allowed") {
+			return "", fmt.Errorf("provider not connected: %s", entry.Provider)
+		}
+		return "", fmt.Errorf("token exchange failed: %s: %s", result.Error, result.ErrorDesc)
+	}
+
+	if result.AccessToken == "" {
+		return "", fmt.Errorf("token exchange returned empty access_token")
+	}
+
+	return result.AccessToken, nil
 }
 
 func isNotConnectedError(err error) bool {
