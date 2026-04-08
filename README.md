@@ -9,10 +9,11 @@ kontext start --agent claude
 ```
 
 1. **Authenticates** — loads your identity from the system keyring (set up via `kontext login`)
-2. **Resolves credentials** — reads `.env.kontext`, exchanges placeholders for short-lived tokens via Kontext
-3. **Launches the agent** — spawns Claude Code with credentials injected as env vars
-4. **Enforces policy** — every tool call is evaluated against your org's OpenFGA policy (via a local sidecar)
-5. **Logs everything** — full audit trail streamed to the Kontext backend via gRPC
+2. **Creates a session** — registers with the Kontext backend, visible in the dashboard
+3. **Resolves credentials** — reads `.env.kontext`, exchanges placeholders for short-lived tokens
+4. **Launches the agent** — spawns Claude Code with credentials injected as env vars + governance hooks
+5. **Captures every action** — PreToolUse, PostToolUse, and UserPromptSubmit events streamed to the backend
+6. **Tears down cleanly** — session disconnected, credentials expired, temp files removed
 
 Credentials are ephemeral — scoped to the session, gone when it ends.
 
@@ -33,14 +34,17 @@ go build -o bin/kontext ./cmd/kontext
 ### First-time setup
 
 ```bash
-kontext login
+kontext start --agent claude
 ```
 
-Opens a browser for OIDC authentication. Stores your refresh token in the system keyring (macOS Keychain / Linux secret service). No client IDs or secrets to manage.
+On first run, the CLI handles everything interactively:
+- No session? Opens browser for OIDC login, stores refresh token in system keyring
+- No `.env.kontext`? Prompts for which providers the project needs, writes the file
+- Provider not connected? Opens browser to the Kontext hosted connect flow
 
 ### Declare credentials
 
-Create a `.env.kontext` file in your project:
+The `.env.kontext` file declares what credentials the project needs:
 
 ```
 GITHUB_TOKEN={{kontext:github}}
@@ -48,13 +52,7 @@ STRIPE_KEY={{kontext:stripe}}
 DATABASE_URL={{kontext:postgres/prod-readonly}}
 ```
 
-### Run
-
-```bash
-kontext start --agent claude
-```
-
-The CLI resolves each placeholder, injects the credentials as env vars, and launches Claude Code with governance hooks active.
+Commit this to your repo — the team shares it.
 
 ### Supported agents
 
@@ -69,26 +67,88 @@ The CLI resolves each placeholder, injects the credentials as env vars, and laun
 ```
 kontext start --agent claude
   │
-  ├── Auth: OIDC refresh token from keyring → ephemeral session token
-  ├── Credentials: .env.kontext → ExchangeCredential RPC → env vars
-  ├── Sidecar: Unix socket server for hook ↔ backend communication
-  ├── Agent: spawn claude with injected env + hook config
+  ├── Auth: OIDC refresh token from keyring
+  ├── ConnectRPC: CreateSession → session in dashboard
+  ├── Sidecar: Unix socket server (kontext.sock)
+  │     ├── Heartbeat loop (30s)
+  │     └── Async event ingestion via ConnectRPC
+  ├── Hooks: settings.json → Claude Code --settings
+  ├── Agent: spawn claude with injected env
   │     │
-  │     ├── [PreToolUse]  → hook binary → sidecar → policy eval → allow/deny
-  │     └── [PostToolUse] → hook binary → sidecar → audit log
+  │     ├── [PreToolUse]        → kontext hook → sidecar → ingest
+  │     ├── [PostToolUse]       → kontext hook → sidecar → ingest
+  │     └── [UserPromptSubmit]  → kontext hook → sidecar → ingest
   │
-  └── Backend: bidirectional gRPC stream (ProcessHookEvent, SyncPolicy)
+  └── On exit: EndSession → cleanup
 ```
 
-**Hook handlers** are the compiled `kontext hook` binary — <5ms startup, communicates with the sidecar over a Unix socket. No per-hook HTTP requests.
+### Hook flow (per tool call)
 
-**Policy evaluation** uses OpenFGA tuples cached locally by the sidecar. The backend streams policy updates in real-time via `SyncPolicy`.
+```
+Claude Code fires PreToolUse
+  → spawns: kontext hook --agent claude
+  → hook reads stdin JSON (tool_name, tool_input)
+  → hook connects to sidecar via KONTEXT_SOCKET (Unix socket)
+  → sidecar returns allow/deny immediately
+  → sidecar ingests event to backend asynchronously
+  → hook writes decision JSON to stdout, exits
+  → ~5ms total (Go binary, no runtime startup)
+```
+
+## Telemetry Strategy
+
+The CLI separates **governance telemetry** from **developer observability**. These are distinct concerns with different backends and data models.
+
+### Governance telemetry (built-in)
+
+Session lifecycle and tool call events flow to the Kontext backend. This powers the dashboard — sessions, traces, audit trail.
+
+| Event | Source | When |
+|---|---|---|
+| `session.begin` | CLI lifecycle | Agent launched |
+| `session.end` | CLI lifecycle | Agent exited |
+| `hook.pre_tool_call` | PreToolUse hook | Before every tool execution |
+| `hook.post_tool_call` | PostToolUse hook | After every tool execution |
+| `hook.user_prompt` | UserPromptSubmit hook | User submits a prompt |
+
+Events are streamed to the backend via the ConnectRPC `ProcessHookEvent` bidirectional stream and stored in the `mcp_events` table.
+
+**What governance telemetry captures:**
+- What the agent tried to do (tool name + input)
+- What happened (tool response)
+- Whether it was allowed (policy decision)
+- Who did it (session → user → org attribution)
+- When (timestamps, duration)
+
+**What governance telemetry does NOT capture:**
+- LLM reasoning or thinking
+- Token usage or cost
+- Model parameters
+- Conversation history
+- Response quality
+
+### Developer observability (external, future)
+
+LLM-level observability — generation details, token costs, reasoning traces, conversation history — is a separate concern. It is not part of the governance pipeline.
+
+For this, the CLI will optionally export OpenTelemetry spans to an external backend:
+- **Langfuse** — open-source, has a native Claude Code integration, self-hostable
+- **Dash0** — OTEL-native SaaS, cheap ($0.60/M spans), AI/agent-aware
+
+This is additive — the governance pipeline works independently. OTEL export is planned but not yet implemented.
 
 ## Protocol
 
 Service definitions: [`proto/kontext/agent/v1/agent.proto`](proto/kontext/agent/v1/agent.proto)
 
-Uses [ConnectRPC](https://connectrpc.com/) (gRPC-compatible) for backend communication.
+The CLI communicates with the Kontext backend exclusively via ConnectRPC using the generated stubs. Requires the server-side `AgentService` endpoint ([kontext-dev/kontext#408](https://github.com/kontext-dev/kontext/issues/408)).
+
+### Sidecar wire protocol
+
+Hook handlers communicate with the sidecar over a Unix socket using length-prefixed JSON (4-byte big-endian uint32 + JSON payload):
+
+- `EvaluateRequest` — hook → sidecar: agent, hook_event, tool_name, tool_input, tool_response
+- `EvaluateResult` — sidecar → hook: allowed (bool), reason (string)
 
 ## Development
 
@@ -96,11 +156,14 @@ Uses [ConnectRPC](https://connectrpc.com/) (gRPC-compatible) for backend communi
 # Build
 go build -o bin/kontext ./cmd/kontext
 
-# Generate protobuf (requires buf)
+# Generate protobuf (requires buf + plugins)
 buf generate
 
 # Test
 go test ./...
+
+# Link for local use
+ln -sf $(pwd)/bin/kontext ~/.local/bin/kontext
 ```
 
 ## License

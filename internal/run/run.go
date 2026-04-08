@@ -1,5 +1,4 @@
 // Package run implements the `kontext start` orchestrator.
-// It handles the full lifecycle: auth → init → credentials → sidecar → subprocess → cleanup.
 package run
 
 import (
@@ -9,13 +8,19 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/cli/browser"
 
+	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-dev/kontext-cli/internal/auth"
+	"github.com/kontext-dev/kontext-cli/internal/backend"
 	"github.com/kontext-dev/kontext-cli/internal/credential"
+	"github.com/kontext-dev/kontext-cli/internal/sidecar"
 )
 
 // Options configures a kontext start run.
@@ -24,12 +29,12 @@ type Options struct {
 	TemplateFile string
 	IssuerURL    string
 	ClientID     string
-	Args         []string // extra args to pass to the agent
+	Args         []string
 }
 
 // Start is the main entry point for `kontext start`.
 func Start(ctx context.Context, opts Options) error {
-	// 1. Auth — login inline if no session
+	// 1. Auth
 	session, err := ensureSession(ctx, opts.IssuerURL, opts.ClientID)
 	if err != nil {
 		return err
@@ -43,34 +48,91 @@ func Start(ctx context.Context, opts Options) error {
 	}
 	fmt.Fprintf(os.Stderr, "✓ Authenticated as %s\n", identity)
 
-	// 2. Ensure env template exists (create interactively on first run)
-	templatePath := opts.TemplateFile
-	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		if err := initTemplate(templatePath); err != nil {
-			return err
-		}
-	}
+	// 2. Backend client — authenticated with the user's OIDC token
+	client := backend.NewClient(backend.BaseURL(), session.AccessToken)
 
-	// 3. Parse template and resolve credentials
-	var resolved []credential.Resolved
-	entries, err := credential.ParseTemplate(templatePath)
+	// 3. Create session via ConnectRPC
+	hostname, _ := os.Hostname()
+	cwd, _ := os.Getwd()
+	createResp, err := client.CreateSession(ctx, &agentv1.CreateSessionRequest{
+		UserId:   identity,
+		Agent:    opts.Agent,
+		Hostname: hostname,
+		Cwd:      cwd,
+		ClientInfo: map[string]string{
+			"name": "kontext-cli",
+			"os":   runtime.GOOS,
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("parse template: %w", err)
+		fmt.Fprintf(os.Stderr, "⚠ Session creation failed: %v\n", err)
+		fmt.Fprintln(os.Stderr, "  Launching without telemetry (backend may not support ConnectRPC yet)")
+		return launchAgentDirect(ctx, opts)
 	}
 
-	if len(entries) > 0 {
-		resolved, err = resolveCredentials(ctx, session, entries)
+	sessionID := createResp.SessionId
+	fmt.Fprintf(os.Stderr, "✓ Session: %s (%s)\n", createResp.SessionName, sessionID[:8])
+
+	// 4. Start sidecar
+	sessionDir := filepath.Join(os.TempDir(), "kontext", sessionID)
+	os.MkdirAll(sessionDir, 0700)
+
+	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent)
+	if err != nil {
+		return fmt.Errorf("sidecar: %w", err)
+	}
+	if err := sc.Start(ctx); err != nil {
+		return fmt.Errorf("sidecar start: %w", err)
+	}
+	defer sc.Stop()
+
+	// 5. Generate hook settings
+	kontextBin, _ := os.Executable()
+	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
+	if err != nil {
+		return fmt.Errorf("generate settings: %w", err)
+	}
+
+	// 6. Env template + credentials (optional)
+	var resolved []credential.Resolved
+	if _, err := os.Stat(opts.TemplateFile); err == nil {
+		entries, err := credential.ParseTemplate(opts.TemplateFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("parse template: %w", err)
+		}
+		if len(entries) > 0 {
+			resolved, err = resolveCredentials(ctx, session, entries)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	// 5. Build environment
+	// 7. Build env
 	env := buildEnv(resolved)
+	env = append(env, "KONTEXT_SOCKET="+sc.SocketPath())
+	env = append(env, "KONTEXT_SESSION_ID="+sessionID)
 
-	// 6. Launch agent
+	// 8. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
-	return launchAgent(ctx, opts.Agent, env, opts.Args)
+	agentErr := launchAgentWithSettings(ctx, opts.Agent, env, opts.Args, settingsPath)
+
+	// 9. Teardown (always runs, even on non-zero agent exit)
+	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = client.EndSession(endCtx, sessionID)
+	fmt.Fprintf(os.Stderr, "\n✓ Session ended (%s)\n", sessionID[:8])
+
+	os.RemoveAll(sessionDir)
+
+	// Propagate agent exit code
+	if agentErr != nil {
+		if exitErr, ok := agentErr.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+	}
+	return agentErr
 }
 
 // ensureSession loads the session or triggers an interactive login.
@@ -93,52 +155,8 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 	return result.Session, nil
 }
 
-
-// initTemplate interactively creates a .env.kontext on first run.
-func initTemplate(path string) error {
-	providers := []struct {
-		Name   string
-		EnvVar string
-		Handle string
-	}{
-		{"GitHub", "GITHUB_TOKEN", "github"},
-		{"Google Workspace", "GOOGLE_TOKEN", "google-workspace"},
-		{"Stripe", "STRIPE_KEY", "stripe"},
-		{"Linear", "LINEAR_API_KEY", "linear"},
-		{"Slack", "SLACK_TOKEN", "slack"},
-		{"PostgreSQL", "DATABASE_URL", "postgres"},
-	}
-
-	fmt.Fprintln(os.Stderr, "\nNo .env.kontext found. Which providers does this project need?")
-	reader := bufio.NewReader(os.Stdin)
-
-	var lines []string
-	for _, p := range providers {
-		fmt.Fprintf(os.Stderr, "  %s? [y/N] ", p.Name)
-		input, _ := reader.ReadString('\n')
-		if strings.TrimSpace(strings.ToLower(input)) == "y" {
-			lines = append(lines, fmt.Sprintf("%s={{kontext:%s}}", p.EnvVar, p.Handle))
-		}
-	}
-
-	if len(lines) == 0 {
-		// Write an empty template so it doesn't prompt again
-		lines = append(lines, "# Add providers: VAR_NAME={{kontext:provider-handle}}")
-	}
-
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	fmt.Fprintf(os.Stderr, "✓ Wrote %s\n\n", path)
-	return nil
-}
-
 // resolveCredentials exchanges each template entry for a live credential.
 func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry) ([]credential.Resolved, error) {
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	var resolved []credential.Resolved
 
@@ -147,21 +165,15 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 
 		value, err := exchangeCredential(ctx, session, entry)
 		if err != nil {
-			// Check if this is a "not connected" error — prompt to connect
 			if isNotConnectedError(err) {
 				fmt.Fprintln(os.Stderr, "not connected")
 				fmt.Fprintf(os.Stderr, "  Opening browser to connect %s...\n", entry.Provider)
-
 				connectURL := fmt.Sprintf("%s/connect/%s", auth.DefaultIssuerURL, entry.Provider)
 				_ = browser.OpenURL(connectURL)
-
 				fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
 				bufio.NewReader(os.Stdin).ReadString('\n')
-
-				// Retry
 				value, err = exchangeCredential(ctx, session, entry)
 			}
-
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "⚠ skipped (%v)\n", err)
 				continue
@@ -175,10 +187,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	return resolved, nil
 }
 
-// exchangeCredential calls the Kontext backend to resolve a single credential.
-// TODO: Replace with actual gRPC ExchangeCredential call.
 func exchangeCredential(_ context.Context, _ *auth.Session, _ credential.Entry) (string, error) {
-	// Placeholder — will be wired to gRPC ExchangeCredential RPC
 	return "", fmt.Errorf("credential exchange not yet connected to backend")
 }
 
@@ -187,26 +196,29 @@ func isNotConnectedError(err error) bool {
 		strings.Contains(err.Error(), "provider not found")
 }
 
-// buildEnv constructs the environment for the agent subprocess.
 func buildEnv(resolved []credential.Resolved) []string {
-	// Pass through the parent environment + add Kontext session indicator +
-	// overlay resolved credentials. In the future, this should be tightened
-	// to a minimal allowlist to prevent leaking existing secrets.
 	env := append(os.Environ(), "KONTEXT_RUN=1")
 	return credential.BuildEnv(resolved, env)
 }
 
-// launchAgent spawns the agent as a subprocess with the given environment.
-func launchAgent(_ context.Context, agentName string, env []string, extraArgs []string) error {
-	binary, err := exec.LookPath(agentName)
+func launchAgentDirect(ctx context.Context, opts Options) error {
+	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
+	return launchAgentWithSettings(ctx, opts.Agent, os.Environ(), opts.Args, "")
+}
+
+func launchAgentWithSettings(_ context.Context, agentName string, env, extraArgs []string, settingsPath string) error {
+	binaryPath, err := exec.LookPath(agentName)
 	if err != nil {
 		return fmt.Errorf("agent %q not found in PATH: %w", agentName, err)
 	}
 
-	// Filter out dangerous flags that could bypass governance
-	filtered := filterArgs(extraArgs)
+	var args []string
+	if settingsPath != "" {
+		args = append(args, "--settings", settingsPath)
+	}
+	args = append(args, filterArgs(extraArgs)...)
 
-	cmd := exec.Command(binary, filtered...)
+	cmd := exec.Command(binaryPath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -216,7 +228,6 @@ func launchAgent(_ context.Context, agentName string, env []string, extraArgs []
 		return fmt.Errorf("launch %s: %w", agentName, err)
 	}
 
-	// Forward signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -227,38 +238,21 @@ func launchAgent(_ context.Context, agentName string, env []string, extraArgs []
 
 	err = cmd.Wait()
 	signal.Stop(sigCh)
+	close(sigCh)
 
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			os.Exit(exitErr.ExitCode())
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
-// filterArgs removes flags that could bypass governance.
 func filterArgs(args []string) []string {
 	blocked := map[string]bool{
-		"--bare":                          true,
-		"--dangerously-skip-permissions":  true,
-		"--settings":                      true,
-		"--setting-sources":               true,
+		"--bare":                         true,
+		"--dangerously-skip-permissions": true,
 	}
 
 	var filtered []string
-	skip := false
 	for _, arg := range args {
-		if skip {
-			skip = false
-			continue
-		}
 		if blocked[arg] {
 			fmt.Fprintf(os.Stderr, "⚠ Stripped blocked flag: %s\n", arg)
-			// If this flag takes a value, skip the next arg too
-			if arg == "--settings" || arg == "--setting-sources" {
-				skip = true
-			}
 			continue
 		}
 		filtered = append(filtered, arg)
