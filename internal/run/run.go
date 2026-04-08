@@ -77,27 +77,8 @@ func Start(ctx context.Context, opts Options) error {
 	sessionID := createResp.SessionId
 	fmt.Fprintf(os.Stderr, "✓ Session: %s (%s)\n", createResp.SessionName, truncateID(sessionID))
 
-	// 4. Start sidecar
-	sessionDir := filepath.Join(os.TempDir(), "kontext", sessionID)
-	os.MkdirAll(sessionDir, 0700)
-
-	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent)
-	if err != nil {
-		return fmt.Errorf("sidecar: %w", err)
-	}
-	if err := sc.Start(ctx); err != nil {
-		return fmt.Errorf("sidecar start: %w", err)
-	}
-	defer sc.Stop()
-
-	// 5. Generate hook settings
-	kontextBin, _ := os.Executable()
-	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
-	if err != nil {
-		return fmt.Errorf("generate settings: %w", err)
-	}
-
-	// 6. Env template + credentials (optional)
+	// 4. Resolve credentials (before sidecar starts — no background goroutines yet,
+	//    so reading session fields is safe without synchronization)
 	var resolved []credential.Resolved
 	if _, err := os.Stat(opts.TemplateFile); err == nil {
 		entries, err := credential.ParseTemplate(opts.TemplateFile)
@@ -110,6 +91,26 @@ func Start(ctx context.Context, opts Options) error {
 				return err
 			}
 		}
+	}
+
+	// 5. Start sidecar
+	sessionDir := filepath.Join(os.TempDir(), "kontext", sessionID)
+	os.MkdirAll(sessionDir, 0700)
+
+	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent)
+	if err != nil {
+		return fmt.Errorf("sidecar: %w", err)
+	}
+	if err := sc.Start(ctx); err != nil {
+		return fmt.Errorf("sidecar start: %w", err)
+	}
+	defer sc.Stop()
+
+	// 6. Generate hook settings
+	kontextBin, _ := os.Executable()
+	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
+	if err != nil {
+		return fmt.Errorf("generate settings: %w", err)
 	}
 
 	// 7. Build env
