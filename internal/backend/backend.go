@@ -82,10 +82,10 @@ func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventR
 		return fmt.Errorf("send hook event: %w", err)
 	}
 	if err := stream.CloseRequest(); err != nil {
-		return err
+		return fmt.Errorf("close request: %w", err)
 	}
-	if resp, err := stream.Receive(); err == nil {
-		_ = resp
+	if _, err := stream.Receive(); err != nil {
+		return fmt.Errorf("receive response: %w", err)
 	}
 	return stream.CloseResponse()
 }

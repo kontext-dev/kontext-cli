@@ -5,10 +5,13 @@ package sidecar
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
@@ -23,6 +26,9 @@ type Server struct {
 	agentName  string
 	client     *backend.Client
 	cancel     context.CancelFunc
+
+	ingestFails   atomic.Int64
+	ingestWarnOnce sync.Once
 }
 
 // New creates a new sidecar server.
@@ -120,20 +126,32 @@ func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 	}
 
 	if err := s.client.IngestEvent(ctx, hookEvent); err != nil {
-		log.Printf("sidecar: ingest: %v", err)
+		n := s.ingestFails.Add(1)
+		s.ingestWarnOnce.Do(func() {
+			fmt.Fprintf(os.Stderr, "sidecar: event ingestion failed: %v\n", err)
+		})
+		if n > 1 && n%10 == 0 {
+			fmt.Fprintf(os.Stderr, "sidecar: %d event ingestion failures (latest: %v)\n", n, err)
+		}
 	}
 }
 
 func (s *Server) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	consecutiveFails := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if err := s.client.Heartbeat(ctx, s.sessionID); err != nil {
-				log.Printf("sidecar: heartbeat: %v", err)
+				consecutiveFails++
+				if consecutiveFails == 1 || consecutiveFails == 3 {
+					fmt.Fprintf(os.Stderr, "sidecar: heartbeat failed (attempt %d): %v\n", consecutiveFails, err)
+				}
+			} else {
+				consecutiveFails = 0
 			}
 		}
 	}
