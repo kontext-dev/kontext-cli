@@ -94,7 +94,10 @@ func Start(ctx context.Context, opts Options) error {
 	}
 
 	// 5. Start sidecar
-	sessionDir := filepath.Join(os.TempDir(), "kontext", sessionID)
+	// Use /tmp (not $TMPDIR) with a short ID to keep the Unix socket path
+	// under macOS's 104-byte sun_path limit. $TMPDIR on macOS is a long
+	// path like /var/folders/.../T/ which pushes the socket path over.
+	sessionDir := filepath.Join("/tmp", "kontext", truncateID(sessionID))
 	os.MkdirAll(sessionDir, 0700)
 
 	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent)
@@ -126,8 +129,11 @@ func Start(ctx context.Context, opts Options) error {
 	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_ = client.EndSession(endCtx, sessionID)
-	fmt.Fprintf(os.Stderr, "\n✓ Session ended (%s)\n", truncateID(sessionID))
+	if err := client.EndSession(endCtx, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "\n⚠ Could not end session on backend: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "\n✓ Session ended (%s)\n", truncateID(sessionID))
+	}
 
 	os.RemoveAll(sessionDir)
 
