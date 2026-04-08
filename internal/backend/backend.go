@@ -79,6 +79,7 @@ func (c *Client) EndSession(ctx context.Context, sessionID string) error {
 // Requires HTTP/2 (HTTPS in dev via mkcert, HTTPS in production via edge TLS).
 func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error {
 	stream := c.rpc.ProcessHookEvent(ctx)
+	defer stream.CloseResponse()
 	if err := stream.Send(req); err != nil {
 		return fmt.Errorf("send hook event: %w", err)
 	}
@@ -88,7 +89,7 @@ func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventR
 	if _, err := stream.Receive(); err != nil {
 		return fmt.Errorf("receive response: %w", err)
 	}
-	return stream.CloseResponse()
+	return nil
 }
 
 // bearerTransport fetches a fresh token for every outgoing request.
