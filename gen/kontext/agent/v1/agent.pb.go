@@ -586,9 +586,9 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\x14DECISION_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eDECISION_ALLOW\x10\x01\x12\x11\n" +
 	"\rDECISION_DENY\x10\x02\x12\x10\n" +
-	"\fDECISION_ASK\x10\x032\x8e\x03\n" +
-	"\fAgentService\x12m\n" +
-	"\x10ProcessHookEvent\x12).kontext.agent.v1.ProcessHookEventRequest\x1a*.kontext.agent.v1.ProcessHookEventResponse(\x010\x01\x12`\n" +
+	"\fDECISION_ASK\x10\x032\x8a\x03\n" +
+	"\fAgentService\x12i\n" +
+	"\x10ProcessHookEvent\x12).kontext.agent.v1.ProcessHookEventRequest\x1a*.kontext.agent.v1.ProcessHookEventResponse\x12`\n" +
 	"\rCreateSession\x12&.kontext.agent.v1.CreateSessionRequest\x1a'.kontext.agent.v1.CreateSessionResponse\x12T\n" +
 	"\tHeartbeat\x12\".kontext.agent.v1.HeartbeatRequest\x1a#.kontext.agent.v1.HeartbeatResponse\x12W\n" +
 	"\n" +
