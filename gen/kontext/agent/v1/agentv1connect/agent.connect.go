@@ -47,10 +47,9 @@ const (
 
 // AgentServiceClient is a client for the kontext.agent.v1.AgentService service.
 type AgentServiceClient interface {
-	// ProcessHookEvent streams tool call events from the CLI to the backend
-	// and receives policy decisions in return. Bidirectional streaming keeps
-	// the connection open for the session lifetime.
-	ProcessHookEvent(context.Context) *connect.BidiStreamForClient[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]
+	// ProcessHookEvent sends a single tool call event from the CLI to the
+	// backend and receives a policy decision in return.
+	ProcessHookEvent(context.Context, *connect.Request[v1.ProcessHookEventRequest]) (*connect.Response[v1.ProcessHookEventResponse], error)
 	// CreateSession establishes a governed agent session. Called once at the
 	// start of `kontext start`.
 	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error)
@@ -108,8 +107,8 @@ type agentServiceClient struct {
 }
 
 // ProcessHookEvent calls kontext.agent.v1.AgentService.ProcessHookEvent.
-func (c *agentServiceClient) ProcessHookEvent(ctx context.Context) *connect.BidiStreamForClient[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse] {
-	return c.processHookEvent.CallBidiStream(ctx)
+func (c *agentServiceClient) ProcessHookEvent(ctx context.Context, req *connect.Request[v1.ProcessHookEventRequest]) (*connect.Response[v1.ProcessHookEventResponse], error) {
+	return c.processHookEvent.CallUnary(ctx, req)
 }
 
 // CreateSession calls kontext.agent.v1.AgentService.CreateSession.
@@ -129,10 +128,9 @@ func (c *agentServiceClient) EndSession(ctx context.Context, req *connect.Reques
 
 // AgentServiceHandler is an implementation of the kontext.agent.v1.AgentService service.
 type AgentServiceHandler interface {
-	// ProcessHookEvent streams tool call events from the CLI to the backend
-	// and receives policy decisions in return. Bidirectional streaming keeps
-	// the connection open for the session lifetime.
-	ProcessHookEvent(context.Context, *connect.BidiStream[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]) error
+	// ProcessHookEvent sends a single tool call event from the CLI to the
+	// backend and receives a policy decision in return.
+	ProcessHookEvent(context.Context, *connect.Request[v1.ProcessHookEventRequest]) (*connect.Response[v1.ProcessHookEventResponse], error)
 	// CreateSession establishes a governed agent session. Called once at the
 	// start of `kontext start`.
 	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error)
@@ -150,7 +148,7 @@ type AgentServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	agentServiceMethods := v1.File_kontext_agent_v1_agent_proto.Services().ByName("AgentService").Methods()
-	agentServiceProcessHookEventHandler := connect.NewBidiStreamHandler(
+	agentServiceProcessHookEventHandler := connect.NewUnaryHandler(
 		AgentServiceProcessHookEventProcedure,
 		svc.ProcessHookEvent,
 		connect.WithSchema(agentServiceMethods.ByName("ProcessHookEvent")),
@@ -193,8 +191,8 @@ func NewAgentServiceHandler(svc AgentServiceHandler, opts ...connect.HandlerOpti
 // UnimplementedAgentServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAgentServiceHandler struct{}
 
-func (UnimplementedAgentServiceHandler) ProcessHookEvent(context.Context, *connect.BidiStream[v1.ProcessHookEventRequest, v1.ProcessHookEventResponse]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.ProcessHookEvent is not implemented"))
+func (UnimplementedAgentServiceHandler) ProcessHookEvent(context.Context, *connect.Request[v1.ProcessHookEventRequest]) (*connect.Response[v1.ProcessHookEventResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("kontext.agent.v1.AgentService.ProcessHookEvent is not implemented"))
 }
 
 func (UnimplementedAgentServiceHandler) CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.CreateSessionResponse], error) {

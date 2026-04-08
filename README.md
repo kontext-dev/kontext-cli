@@ -38,6 +38,7 @@ kontext start --agent claude
 ```
 
 On first run, the CLI handles everything interactively:
+
 - No session? Opens browser for OIDC login, stores refresh token in system keyring
 - No `.env.kontext`? Prompts for which providers the project needs, writes the file
 - Provider not connected? Opens browser to the Kontext hosted connect flow
@@ -56,11 +57,11 @@ Commit this to your repo — the team shares it.
 
 ### Supported agents
 
-| Agent | Flag | Status |
-|---|---|---|
-| Claude Code | `--agent claude` | Active |
-| Cursor | `--agent cursor` | Planned |
-| Codex | `--agent codex` | Planned |
+| Agent       | Flag             | Status  |
+| ----------- | ---------------- | ------- |
+| Claude Code | `--agent claude` | Active  |
+| Cursor      | `--agent cursor` | Planned |
+| Codex       | `--agent codex`  | Planned |
 
 ## Architecture
 
@@ -103,17 +104,18 @@ The CLI separates **governance telemetry** from **developer observability**. The
 
 Session lifecycle and tool call events flow to the Kontext backend. This powers the dashboard — sessions, traces, audit trail.
 
-| Event | Source | When |
-|---|---|---|
-| `session.begin` | CLI lifecycle | Agent launched |
-| `session.end` | CLI lifecycle | Agent exited |
-| `hook.pre_tool_call` | PreToolUse hook | Before every tool execution |
-| `hook.post_tool_call` | PostToolUse hook | After every tool execution |
-| `hook.user_prompt` | UserPromptSubmit hook | User submits a prompt |
+| Event                 | Source                | When                        |
+| --------------------- | --------------------- | --------------------------- |
+| `session.begin`       | CLI lifecycle         | Agent launched              |
+| `session.end`         | CLI lifecycle         | Agent exited                |
+| `hook.pre_tool_call`  | PreToolUse hook       | Before every tool execution |
+| `hook.post_tool_call` | PostToolUse hook      | After every tool execution  |
+| `hook.user_prompt`    | UserPromptSubmit hook | User submits a prompt       |
 
-Events are streamed to the backend via the ConnectRPC `ProcessHookEvent` bidirectional stream and stored in the `mcp_events` table.
+Events are sent to the backend via the ConnectRPC `ProcessHookEvent` unary RPC and stored in the `mcp_events` table.
 
 **What governance telemetry captures:**
+
 - What the agent tried to do (tool name + input)
 - What happened (tool response)
 - Whether it was allowed (policy decision)
@@ -121,6 +123,7 @@ Events are streamed to the backend via the ConnectRPC `ProcessHookEvent` bidirec
 - When (timestamps, duration)
 
 **What governance telemetry does NOT capture:**
+
 - LLM reasoning or thinking
 - Token usage or cost
 - Model parameters
@@ -132,6 +135,7 @@ Events are streamed to the backend via the ConnectRPC `ProcessHookEvent` bidirec
 LLM-level observability — generation details, token costs, reasoning traces, conversation history — is a separate concern. It is not part of the governance pipeline.
 
 For this, the CLI will optionally export OpenTelemetry spans to an external backend:
+
 - **Langfuse** — open-source, has a native Claude Code integration, self-hostable
 - **Dash0** — OTEL-native SaaS, cheap ($0.60/M spans), AI/agent-aware
 
