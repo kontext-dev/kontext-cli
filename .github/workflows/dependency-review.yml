@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   dependency-review:
+    if: ${{ github.event.repository.private == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
