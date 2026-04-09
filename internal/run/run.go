@@ -165,18 +165,18 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 }
 
 // resolveCredentials exchanges each template entry for a live credential.
-func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry, clientID string) ([]credential.Resolved, error) {
+func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry, credentialClientID string) ([]credential.Resolved, error) {
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	var resolved []credential.Resolved
 
 	for _, entry := range entries {
 		fmt.Fprintf(os.Stderr, "  %s (%s)... ", entry.EnvVar, entry.Target())
 
-		value, err := exchangeCredential(ctx, session, entry, clientID)
+		value, err := exchangeCredential(ctx, session, entry, credentialClientID)
 		if err != nil {
 			if isNotConnectedError(err) {
 				fmt.Fprintln(os.Stderr, "not connected")
-				connectURL, connectErr := fetchConnectURL(ctx, session, clientID)
+				connectURL, connectErr := fetchConnectURLWithGatewayLoginFallback(ctx, session, credentialClientID, auth.Login)
 				if connectErr != nil {
 					err = fmt.Errorf("create connect session: %w", connectErr)
 				} else {
@@ -185,7 +185,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 					_ = browser.OpenURL(connectURL)
 					fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
 					bufio.NewReader(os.Stdin).ReadString('\n')
-					value, err = exchangeCredential(ctx, session, entry, clientID)
+					value, err = exchangeCredential(ctx, session, entry, credentialClientID)
 				}
 			}
 			if err != nil {
@@ -201,13 +201,39 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	return resolved, nil
 }
 
+type loginFunc func(context.Context, string, string, ...string) (*auth.LoginResult, error)
+
+func fetchConnectURLWithGatewayLoginFallback(
+	ctx context.Context,
+	session *auth.Session,
+	credentialClientID string,
+	login loginFunc,
+) (string, error) {
+	connectURL, err := fetchConnectURL(ctx, session, credentialClientID)
+	if err == nil || !needsGatewayAccessReauthentication(err) {
+		return connectURL, err
+	}
+
+	fmt.Fprintln(os.Stderr, "  Session missing gateway access. Opening browser to authorize this CLI session...")
+	result, err := login(ctx, session.IssuerURL, credentialClientID, "gateway:access")
+	if err != nil {
+		return "", fmt.Errorf("authorize gateway access: %w", err)
+	}
+
+	return fetchConnectURLWithGatewayToken(ctx, session.IssuerURL, result.Session.AccessToken)
+}
+
 func fetchConnectURL(ctx context.Context, session *auth.Session, clientID string) (string, error) {
 	gatewayToken, err := exchangeGatewayToken(ctx, session, clientID)
 	if err != nil {
 		return "", err
 	}
 
-	connectSessionURL := strings.TrimRight(session.IssuerURL, "/") + "/mcp/connect-session"
+	return fetchConnectURLWithGatewayToken(ctx, session.IssuerURL, gatewayToken)
+}
+
+func fetchConnectURLWithGatewayToken(ctx context.Context, issuerURL, gatewayToken string) (string, error) {
+	connectSessionURL := strings.TrimRight(issuerURL, "/") + "/mcp/connect-session"
 
 	req, err := http.NewRequestWithContext(ctx, "POST", connectSessionURL, strings.NewReader("{}"))
 	if err != nil {
@@ -347,6 +373,16 @@ func isNotConnectedError(err error) bool {
 	return strings.Contains(msg, "not connected") ||
 		strings.Contains(msg, "provider not found") ||
 		strings.Contains(msg, "provider_reauthorization_required")
+}
+
+func needsGatewayAccessReauthentication(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "invalid_scope") &&
+		strings.Contains(msg, "gateway:access")
 }
 
 func buildEnv(resolved []credential.Resolved) []string {

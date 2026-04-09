@@ -221,6 +221,96 @@ func TestFetchConnectURLReturnsErrorOnEmptyConnectURL(t *testing.T) {
 	}
 }
 
+func TestFetchConnectURLWithGatewayLoginFallback(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer":"%s","authorization_endpoint":"%s/oauth2/auth","token_endpoint":"%s/oauth2/token","jwks_uri":"%s/.well-known/jwks.json"}`, server.URL, server.URL, server.URL, server.URL)))
+		case "/oauth2/token":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			values, err := url.ParseQuery(string(body))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if values.Get("resource") != "mcp-gateway" {
+				http.Error(w, "wrong resource", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if got := r.Header.Get("Authorization"); got != "Bearer stale-access-token" {
+				http.Error(w, "wrong stale authorization", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"error":"invalid_scope","error_description":"Requested scope 'gateway:access' exceeds subject token scopes"}`))
+		case "/mcp/connect-session":
+			if got := r.Header.Get("Authorization"); got != "Bearer gateway-login-token" {
+				http.Error(w, "wrong gateway authorization", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"connectUrl":"https://app.kontext.security/providers/connect#handshake=session-123"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	session := &auth.Session{
+		IssuerURL:   server.URL,
+		AccessToken: "stale-access-token",
+	}
+
+	var loginCalls int
+	login := func(ctx context.Context, issuerURL, clientID string, scopes ...string) (*auth.LoginResult, error) {
+		loginCalls++
+		if issuerURL != server.URL {
+			t.Fatalf("login issuerURL = %q, want %q", issuerURL, server.URL)
+		}
+		if clientID != "app_agent-123" {
+			t.Fatalf("login clientID = %q, want %q", clientID, "app_agent-123")
+		}
+		if got := strings.Join(scopes, " "); got != "gateway:access" {
+			t.Fatalf("login scopes = %q, want %q", got, "gateway:access")
+		}
+
+		result := &auth.LoginResult{Session: &auth.Session{
+			IssuerURL:   server.URL,
+			AccessToken: "gateway-login-token",
+		}}
+		return result, nil
+	}
+
+	got, err := fetchConnectURLWithGatewayLoginFallback(
+		context.Background(),
+		session,
+		"app_agent-123",
+		login,
+	)
+	if err != nil {
+		t.Fatalf("fetchConnectURLWithGatewayLoginFallback() error = %v", err)
+	}
+	if loginCalls != 1 {
+		t.Fatalf("loginCalls = %d, want 1", loginCalls)
+	}
+	if session.AccessToken != "stale-access-token" {
+		t.Fatalf("session.AccessToken = %q, want stale token unchanged", session.AccessToken)
+	}
+
+	want := "https://app.kontext.security/providers/connect#handshake=session-123"
+	if got != want {
+		t.Fatalf("fetchConnectURLWithGatewayLoginFallback() = %q, want %q", got, want)
+	}
+}
+
 func TestExchangeCredentialUsesProvidedClientID(t *testing.T) {
 	t.Parallel()
 
