@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -53,7 +54,7 @@ func startCmd() *cobra.Command {
 		Use:   "start [flags] [-- extra-agent-args...]",
 		Short: "Launch an agent with Kontext governance",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			updateDone := update.CheckAsync(version)
+			update.CheckAsync(version)
 			ctx := context.Background()
 			err := run.Start(ctx, run.Options{
 				Agent:        agentName,
@@ -62,7 +63,9 @@ func startCmd() *cobra.Command {
 				ClientID:     auth.DefaultClientID,
 				Args:         args,
 			})
-			<-updateDone
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
+			}
 			return err
 		},
 	}

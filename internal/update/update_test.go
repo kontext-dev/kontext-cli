@@ -107,48 +107,63 @@ func TestReadWriteCache(t *testing.T) {
 }
 
 func TestFetchLatest(t *testing.T) {
-	// Mock GitHub API.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ua := r.Header.Get("User-Agent"); ua == "" {
+		if r.Header.Get("User-Agent") == "" {
 			t.Error("expected User-Agent header")
+		}
+		if r.Header.Get("X-GitHub-Api-Version") != "2022-11-28" {
+			t.Errorf("expected X-GitHub-Api-Version 2022-11-28, got %q", r.Header.Get("X-GitHub-Api-Version"))
 		}
 		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v0.3.0"})
 	}))
 	defer srv.Close()
 
-	// Override the repo URL by testing the internal function directly isn't
-	// possible without changing the package, so we test via httptest by
-	// temporarily swapping the fetch function. Since fetchLatest hardcodes
-	// the URL, we test the response parsing logic via the mock server.
-	client := &http.Client{Timeout: 3 * time.Second}
-	req, _ := http.NewRequest("GET", srv.URL, nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "kontext-cli/test")
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
+	old := githubAPIBase
+	githubAPIBase = srv.URL
+	defer func() { githubAPIBase = old }()
 
-	var release struct {
-		TagName string `json:"tag_name"`
+	got := fetchLatest("0.1.0")
+	if got != "0.3.0" {
+		t.Errorf("fetchLatest() = %q, want %q", got, "0.3.0")
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		t.Fatalf("decode failed: %v", err)
+}
+
+func TestFetchLatestNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	old := githubAPIBase
+	githubAPIBase = srv.URL
+	defer func() { githubAPIBase = old }()
+
+	if got := fetchLatest("0.1.0"); got != "" {
+		t.Errorf("fetchLatest() on 403 = %q, want empty", got)
 	}
-	if got := normalise(release.TagName); got != "0.3.0" {
-		t.Errorf("got %q, want %q", got, "0.3.0")
+}
+
+func TestFetchLatestMalformedJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
+
+	old := githubAPIBase
+	githubAPIBase = srv.URL
+	defer func() { githubAPIBase = old }()
+
+	if got := fetchLatest("0.1.0"); got != "" {
+		t.Errorf("fetchLatest() on bad JSON = %q, want empty", got)
 	}
 }
 
 func TestCheckSkipsDevVersion(t *testing.T) {
-	// Should not panic or produce output for dev builds.
 	check("dev")
 	check("")
 }
 
 func TestCheckRespectsOptOut(t *testing.T) {
 	t.Setenv("KONTEXT_NO_UPDATE_CHECK", "1")
-	// Should return immediately without any network calls.
 	check("0.1.0")
 }

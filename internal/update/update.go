@@ -17,6 +17,10 @@ const (
 	cacheTTL = 24 * time.Hour
 )
 
+// githubAPIBase is the base URL for GitHub API requests. Tests override this
+// to point at an httptest server.
+var githubAPIBase = "https://api.github.com"
+
 type cachedVersion struct {
 	LatestVersion string    `json:"latest_version"`
 	CheckedAt     time.Time `json:"checked_at"`
@@ -24,15 +28,9 @@ type cachedVersion struct {
 
 // CheckAsync spawns a background goroutine that checks for a newer release.
 // It prints a one-liner to stderr if an update is available, and does nothing
-// on any error. The done channel is closed when the check completes; callers
-// should wait on it before exiting to avoid truncated output.
-func CheckAsync(currentVersion string) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		check(currentVersion)
-	}()
-	return done
+// on any error. The check is fully fire-and-forget — it never blocks the caller.
+func CheckAsync(currentVersion string) {
+	go check(currentVersion)
 }
 
 func check(currentVersion string) {
@@ -131,13 +129,14 @@ func writeCache(path, version string) {
 
 func fetchLatest(currentVersion string) string {
 	client := &http.Client{Timeout: 3 * time.Second}
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", githubAPIBase, repo)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return ""
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "kontext-cli/"+currentVersion)
 
 	resp, err := client.Do(req)
