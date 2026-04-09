@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -90,7 +91,7 @@ func Start(ctx context.Context, opts Options) error {
 			return fmt.Errorf("parse template: %w", err)
 		}
 		if len(entries) > 0 {
-			resolved, err = resolveCredentials(ctx, session, entries, opts.IssuerURL, opts.ClientID)
+			resolved, err = resolveCredentials(ctx, session, entries, opts.ClientID)
 			if err != nil {
 				return err
 			}
@@ -169,7 +170,7 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 }
 
 // resolveCredentials exchanges each template entry for a live credential.
-func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry, issuerURL, clientID string) ([]credential.Resolved, error) {
+func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry, clientID string) ([]credential.Resolved, error) {
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	var resolved []credential.Resolved
 
@@ -180,12 +181,17 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 		if err != nil {
 			if isNotConnectedError(err) {
 				fmt.Fprintln(os.Stderr, "not connected")
-				fmt.Fprintf(os.Stderr, "  Opening browser to connect %s...\n", entry.Provider)
-				connectURL := fmt.Sprintf("%s/connect/%s", strings.TrimRight(issuerURL, "/"), entry.Provider)
-				_ = browser.OpenURL(connectURL)
-				fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
-				bufio.NewReader(os.Stdin).ReadString('\n')
-				value, err = exchangeCredential(ctx, session, entry, clientID)
+				connectURL, connectErr := fetchConnectURL(ctx, session)
+				if connectErr != nil {
+					err = fmt.Errorf("create connect session: %w", connectErr)
+				} else {
+					fmt.Fprintf(os.Stderr, "  Opening browser to connect %s...\n", entry.Provider)
+					fmt.Fprintf(os.Stderr, "  If the browser doesn't open, visit:\n    %s\n", connectURL)
+					_ = browser.OpenURL(connectURL)
+					fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
+					bufio.NewReader(os.Stdin).ReadString('\n')
+					value, err = exchangeCredential(ctx, session, entry, clientID)
+				}
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "⚠ skipped (%v)\n", err)
@@ -198,6 +204,48 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	}
 
 	return resolved, nil
+}
+
+func fetchConnectURL(ctx context.Context, session *auth.Session) (string, error) {
+	connectSessionURL := strings.TrimRight(session.IssuerURL, "/") + "/mcp/connect-session"
+
+	req, err := http.NewRequestWithContext(ctx, "POST", connectSessionURL, strings.NewReader("{}"))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("connect session request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if readErr != nil {
+			return "", fmt.Errorf("connect session request failed: %s", resp.Status)
+		}
+
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			return "", fmt.Errorf("connect session request failed: %s", resp.Status)
+		}
+		return "", fmt.Errorf("connect session request failed: %s: %s", resp.Status, msg)
+	}
+
+	var result struct {
+		ConnectURL string `json:"connectUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode connect session response: %w", err)
+	}
+	if result.ConnectURL == "" {
+		return "", fmt.Errorf("connect session response missing connectUrl")
+	}
+
+	return result.ConnectURL, nil
 }
 
 // exchangeCredential calls POST /oauth2/token with RFC 8693 token exchange
