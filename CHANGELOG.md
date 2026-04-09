@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/kontext-dev/kontext-cli/compare/v0.1.0...v0.1.1) (2026-04-09)
+
+
+### Bug Fixes
+
+* handle provider_reauthorization_required as reconnect-needed ([#27](https://github.com/kontext-dev/kontext-cli/issues/27)) ([8e89e26](https://github.com/kontext-dev/kontext-cli/commit/8e89e2674ac88f5fe2f8f5907034bd851a15ff97))
+* harden CLI repo for public release ([075d44f](https://github.com/kontext-dev/kontext-cli/commit/075d44ffd014a911ef6a8e63a19d7868cfbc407b))
+
 ## 0.1.0 (2026-04-09)
 
 
