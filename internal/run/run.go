@@ -18,8 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cli/browser"
-
 	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-dev/kontext-cli/internal/auth"
 	"github.com/kontext-dev/kontext-cli/internal/backend"
@@ -173,11 +171,9 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 		value, err := exchangeCredential(ctx, session, entry)
 		if err != nil {
 			if isNotConnectedError(err) {
-				fmt.Fprintln(os.Stderr, "not connected")
-				fmt.Fprintf(os.Stderr, "  Opening browser to connect %s...\n", entry.Provider)
-				connectURL := fmt.Sprintf("%s/connect/%s", auth.DefaultIssuerURL, entry.Provider)
-				_ = browser.OpenURL(connectURL)
-				fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
+				fmt.Fprintln(os.Stderr, "needs authorization")
+				fmt.Fprintf(os.Stderr, "  → Connect %s via an MCP client (e.g. Claude Desktop) or the hosted connect flow.\n", entry.Provider)
+				fmt.Fprintf(os.Stderr, "  → Then press Enter to retry, or press Enter now to skip.\n")
 				bufio.NewReader(os.Stdin).ReadString('\n')
 				value, err = exchangeCredential(ctx, session, entry)
 			}
@@ -263,13 +259,15 @@ func buildEnv(resolved []credential.Resolved) []string {
 
 // newSessionTokenSource returns a TokenSource that transparently refreshes
 // the OIDC access token when it expires, so long-running sessions keep working.
+// If forceRefresh is true, the token is refreshed unconditionally (used by
+// the transport layer after receiving a 401 from the server).
 func newSessionTokenSource(ctx context.Context, session *auth.Session) backend.TokenSource {
 	mu := &sync.Mutex{}
-	return func() (string, error) {
+	return func(forceRefresh bool) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		if !session.IsExpired() {
+		if !forceRefresh && !session.IsExpired() {
 			return session.AccessToken, nil
 		}
 
@@ -277,6 +275,8 @@ func newSessionTokenSource(ctx context.Context, session *auth.Session) backend.T
 		if err != nil {
 			return "", fmt.Errorf("token expired and refresh failed: %w", err)
 		}
+
+		fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
 
 		// Persist so other processes (and the next `kontext start`) see the new token
 		if saveErr := auth.SaveSession(refreshed); saveErr != nil {
