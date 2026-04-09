@@ -25,6 +25,13 @@ const (
 	DefaultIssuerURL = "https://api.kontext.security"
 )
 
+var defaultLoginScopes = []string{
+	"openid",
+	"email",
+	"profile",
+	"offline_access",
+}
+
 // LoginResult is the output of a successful login flow.
 type LoginResult struct {
 	Session *Session
@@ -66,7 +73,8 @@ func DiscoverEndpoints(ctx context.Context, baseURL string) (*OAuthMetadata, err
 }
 
 // Login performs the browser-based OAuth PKCE login flow.
-func Login(ctx context.Context, issuerURL, clientID string) (*LoginResult, error) {
+// When scopes are omitted, the default CLI login scopes are used.
+func Login(ctx context.Context, issuerURL, clientID string, scopes ...string) (*LoginResult, error) {
 	// 1. Discover endpoints
 	meta, err := DiscoverEndpoints(ctx, issuerURL)
 	if err != nil {
@@ -101,7 +109,7 @@ func Login(ctx context.Context, issuerURL, clientID string) (*LoginResult, error
 			TokenURL: meta.TokenEndpoint,
 		},
 		RedirectURL: redirectURI,
-		Scopes:      []string{"openid", "email", "profile", "offline_access"},
+		Scopes:      resolveLoginScopes(scopes),
 	}
 
 	// 5. Generate state parameter
@@ -173,6 +181,14 @@ func Login(ctx context.Context, issuerURL, clientID string) (*LoginResult, error
 	}
 
 	return &LoginResult{Session: session}, nil
+}
+
+func resolveLoginScopes(scopes []string) []string {
+	if len(scopes) > 0 {
+		return append([]string(nil), scopes...)
+	}
+
+	return append([]string(nil), defaultLoginScopes...)
 }
 
 // RefreshSession attempts to refresh an expired session using the refresh token.
