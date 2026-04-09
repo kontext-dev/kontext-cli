@@ -111,8 +111,8 @@ func TestFetchLatest(t *testing.T) {
 		if r.Header.Get("User-Agent") == "" {
 			t.Error("expected User-Agent header")
 		}
-		if r.Header.Get("X-GitHub-Api-Version") != "2022-11-28" {
-			t.Errorf("expected X-GitHub-Api-Version 2022-11-28, got %q", r.Header.Get("X-GitHub-Api-Version"))
+		if r.Header.Get("X-GitHub-Api-Version") != "2026-03-10" {
+			t.Errorf("expected X-GitHub-Api-Version 2026-03-10, got %q", r.Header.Get("X-GitHub-Api-Version"))
 		}
 		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v0.3.0"})
 	}))

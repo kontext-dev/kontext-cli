@@ -136,7 +136,7 @@ func fetchLatest(currentVersion string) string {
 		return ""
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
 	req.Header.Set("User-Agent", "kontext-cli/"+currentVersion)
 
 	resp, err := client.Do(req)
