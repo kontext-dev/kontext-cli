@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/kontext-dev/kontext-cli/compare/v0.1.1...v0.2.0) (2026-04-09)
+
+
+### Features
+
+* **cli:** add logout command ([#46](https://github.com/kontext-dev/kontext-cli/issues/46)) ([840c98c](https://github.com/kontext-dev/kontext-cli/commit/840c98cec7eb85c8812b43664f02f3264e2cc340))
+* **cli:** check for new releases on startup ([#48](https://github.com/kontext-dev/kontext-cli/issues/48)) ([ef435d6](https://github.com/kontext-dev/kontext-cli/commit/ef435d6e6cd0f74b9c0fe0291c9b66bb64c11440))
+
+
+### Bug Fixes
+
+* **cli:** exchange gateway token after agent auth ([#50](https://github.com/kontext-dev/kontext-cli/issues/50)) ([77608e2](https://github.com/kontext-dev/kontext-cli/commit/77608e2fbdcfad5448e3bc19f61c1bb53f1066ff))
+* **cli:** scope exchanges to the session agent ([#47](https://github.com/kontext-dev/kontext-cli/issues/47)) ([3c236bc](https://github.com/kontext-dev/kontext-cli/commit/3c236bc239ad6e321d0bc8ed399bc0eb3174e0b5))
+* **cli:** use agent-scoped gateway login for connect sessions ([#49](https://github.com/kontext-dev/kontext-cli/issues/49)) ([0ab023c](https://github.com/kontext-dev/kontext-cli/commit/0ab023cc5d336a3c03966ce6f8679f83ea80bc2a))
+* use connect-session URL for provider auth ([8aeede0](https://github.com/kontext-dev/kontext-cli/commit/8aeede08b0714c3af4ec55ed542816916b45630e))
+
 ## [0.1.1](https://github.com/kontext-dev/kontext-cli/compare/v0.1.0...v0.1.1) (2026-04-09)
 
 
