@@ -220,7 +220,12 @@ func fetchConnectURLWithGatewayLoginFallback(
 		return "", fmt.Errorf("authorize gateway access: %w", err)
 	}
 
-	return fetchConnectURLWithGatewayToken(ctx, session.IssuerURL, result.Session.AccessToken)
+	gatewayToken, err := exchangeGatewayToken(ctx, result.Session, credentialClientID)
+	if err != nil {
+		return "", fmt.Errorf("exchange gateway token after authorize: %w", err)
+	}
+
+	return fetchConnectURLWithGatewayToken(ctx, result.Session.IssuerURL, gatewayToken)
 }
 
 func fetchConnectURL(ctx context.Context, session *auth.Session, clientID string) (string, error) {
