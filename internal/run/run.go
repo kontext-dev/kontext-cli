@@ -670,7 +670,7 @@ func classifyCredentialFailure(
 	}
 
 	switch result.Error {
-	case "provider_required", "provider_not_configured":
+	case "provider_required", "provider_not_configured", "provider_reauthorization_required":
 		return failureDisconnected
 	default:
 		return ""
