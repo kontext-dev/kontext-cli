@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"time"
 
-	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
-	"github.com/kontext-dev/kontext-cli/internal/backend"
+	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
+	"github.com/kontext-security/kontext-cli/internal/backend"
 )
 
 // Server is the local sidecar that hook handlers communicate with.

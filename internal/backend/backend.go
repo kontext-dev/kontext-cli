@@ -12,8 +12,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
-	"github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1/agentv1connect"
+	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
+	"github.com/kontext-security/kontext-cli/gen/kontext/agent/v1/agentv1connect"
 )
 
 // TokenSource returns a valid access token, refreshing if necessary.

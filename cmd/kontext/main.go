@@ -13,15 +13,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zalando/go-keyring"
 
-	"github.com/kontext-dev/kontext-cli/internal/agent"
-	"github.com/kontext-dev/kontext-cli/internal/auth"
-	"github.com/kontext-dev/kontext-cli/internal/hook"
-	"github.com/kontext-dev/kontext-cli/internal/run"
-	"github.com/kontext-dev/kontext-cli/internal/sidecar"
-	"github.com/kontext-dev/kontext-cli/internal/update"
+	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/auth"
+	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/run"
+	"github.com/kontext-security/kontext-cli/internal/sidecar"
+	"github.com/kontext-security/kontext-cli/internal/update"
 
 	// Register agent adapters
-	_ "github.com/kontext-dev/kontext-cli/internal/agent/claude"
+	_ "github.com/kontext-security/kontext-cli/internal/agent/claude"
 )
 
 var version = "dev"

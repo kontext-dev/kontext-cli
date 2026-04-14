@@ -4,7 +4,7 @@ Use the right channel so we can help quickly:
 
 - Bug reports and feature requests: open a GitHub issue.
 - Security reports: use private vulnerability reporting or follow [SECURITY.md](SECURITY.md).
-- Questions about setup or product usage: use the [Kontext docs](https://kontext.security/docs) or join the [Discord community](https://discord.gg/gw9UpFUhyY).
+- Questions about setup or product usage: use the [Kontext docs](https://docs.kontext.security/getting-started/welcome) or join the [Discord community](https://discord.gg/gw9UpFUhyY).
 
 When asking for help, include:
 

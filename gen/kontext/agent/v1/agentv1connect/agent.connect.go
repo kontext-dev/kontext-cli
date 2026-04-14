@@ -8,7 +8,7 @@ import (
 	connect "connectrpc.com/connect"
 	context "context"
 	errors "errors"
-	v1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
+	v1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	http "net/http"
 	strings "strings"
 )

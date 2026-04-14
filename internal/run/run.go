@@ -22,12 +22,12 @@ import (
 
 	"github.com/cli/browser"
 
-	agentv1 "github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1"
-	"github.com/kontext-dev/kontext-cli/internal/agent"
-	"github.com/kontext-dev/kontext-cli/internal/auth"
-	"github.com/kontext-dev/kontext-cli/internal/backend"
-	"github.com/kontext-dev/kontext-cli/internal/credential"
-	"github.com/kontext-dev/kontext-cli/internal/sidecar"
+	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
+	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/auth"
+	"github.com/kontext-security/kontext-cli/internal/backend"
+	"github.com/kontext-security/kontext-cli/internal/credential"
+	"github.com/kontext-security/kontext-cli/internal/sidecar"
 )
 
 // Options configures a kontext start run.

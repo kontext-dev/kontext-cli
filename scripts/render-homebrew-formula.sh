@@ -50,22 +50,22 @@ class Kontext < Formula
 
   on_macos do
     if Hardware::CPU.intel?
-      url "https://github.com/kontext-dev/kontext-cli/releases/download/v${version}/${darwin_amd64_archive}"
+      url "https://github.com/kontext-security/kontext-cli/releases/download/v${version}/${darwin_amd64_archive}"
       sha256 "${darwin_amd64_sha}"
     end
     if Hardware::CPU.arm?
-      url "https://github.com/kontext-dev/kontext-cli/releases/download/v${version}/${darwin_arm64_archive}"
+      url "https://github.com/kontext-security/kontext-cli/releases/download/v${version}/${darwin_arm64_archive}"
       sha256 "${darwin_arm64_sha}"
     end
   end
 
   on_linux do
     if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
-      url "https://github.com/kontext-dev/kontext-cli/releases/download/v${version}/${linux_amd64_archive}"
+      url "https://github.com/kontext-security/kontext-cli/releases/download/v${version}/${linux_amd64_archive}"
       sha256 "${linux_amd64_sha}"
     end
     if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/kontext-dev/kontext-cli/releases/download/v${version}/${linux_arm64_archive}"
+      url "https://github.com/kontext-security/kontext-cli/releases/download/v${version}/${linux_arm64_archive}"
       sha256 "${linux_arm64_sha}"
     end
   end
