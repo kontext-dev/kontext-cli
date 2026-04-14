@@ -64,7 +64,7 @@ func inlineCommentIndex(value string) int {
 				inDouble = !inDouble
 			}
 		case '#':
-			if !inSingle && !inDouble && i > 0 && isInlineCommentWhitespace(value[i-1]) {
+			if !inSingle && !inDouble && (i == 0 || isInlineCommentWhitespace(value[i-1])) {
 				return i
 			}
 		}

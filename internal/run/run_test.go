@@ -726,6 +726,27 @@ func TestBuildEnvPreservesLiteralHashFragmentsWithoutWhitespace(t *testing.T) {
 	}
 }
 
+func TestBuildEnvTreatsCommentOnlyRightHandSideAsEmpty(t *testing.T) {
+	t.Parallel()
+
+	env := buildEnv(
+		&credential.TemplateFile{
+			ExistingValues: map[string]string{
+				"OPENAI_API_KEY": " # set later",
+			},
+		},
+		nil,
+	)
+
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "OPENAI_API_KEY=") {
+		t.Fatalf("buildEnv() missing empty env assignment: %q", joined)
+	}
+	if strings.Contains(joined, "OPENAI_API_KEY=# set later") {
+		t.Fatalf("buildEnv() preserved comment-only value: %q", joined)
+	}
+}
+
 type recordingSessionEnder struct {
 	sessionID string
 	calls     int
