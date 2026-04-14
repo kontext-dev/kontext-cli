@@ -383,11 +383,45 @@ func TestExchangeCredentialUsesProvidedClientID(t *testing.T) {
 	}
 }
 
-func TestIsNotConnectedErrorRecognizesProviderRequired(t *testing.T) {
+func TestExchangeCredentialReturnsTypedFailureReason(t *testing.T) {
 	t.Parallel()
 
-	if !isNotConnectedError(fmt.Errorf("token exchange failed: provider_required: User has not configured provider 'Linear Stub'")) {
-		t.Fatal("expected provider_required to trigger hosted connect fallback")
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer":"%s","authorization_endpoint":"%s/oauth2/auth","token_endpoint":"%s/oauth2/token","jwks_uri":"%s/.well-known/jwks.json"}`, server.URL, server.URL, server.URL, server.URL)))
+		case "/oauth2/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":"provider_required","error_description":"User has not configured provider 'Linear Stub'","failure_reason":"disconnected_or_reauth_required","provider_name":"Linear Stub","provider_id":"provider-linear"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	session := &auth.Session{
+		IssuerURL:   server.URL,
+		AccessToken: "test-access-token",
+	}
+
+	_, err := exchangeCredential(
+		context.Background(),
+		session,
+		credential.Entry{EnvVar: "LINEAR_API_KEY", Provider: "linear"},
+		"app_agent-123",
+	)
+	if err == nil {
+		t.Fatal("exchangeCredential() error = nil, want non-nil")
+	}
+
+	resolutionErr, ok := err.(*credentialResolutionError)
+	if !ok {
+		t.Fatalf("exchangeCredential() error type = %T, want *credentialResolutionError", err)
+	}
+	if resolutionErr.Reason != failureDisconnected {
+		t.Fatalf("resolutionErr.Reason = %q, want %q", resolutionErr.Reason, failureDisconnected)
 	}
 }
 
@@ -408,5 +442,38 @@ func TestResolveCredentialClientID(t *testing.T) {
 
 	if got := resolveCredentialClientID("", "bootstrap-client"); got != "bootstrap-client" {
 		t.Fatalf("resolveCredentialClientID() empty agent = %q, want %q", got, "bootstrap-client")
+	}
+}
+
+func TestBuildEnvUsesLiteralValuesAndResolvedPlaceholders(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "shell-token")
+
+	env := buildEnv(
+		&credential.TemplateFile{
+			Entries: []credential.Entry{
+				{EnvVar: "GITHUB_TOKEN", Provider: "github"},
+			},
+			ExistingValues: map[string]string{
+				"GITHUB_TOKEN":   "{{kontext:github}}",
+				"LINEAR_API_KEY": "literal-linear-token",
+			},
+		},
+		[]credential.Resolved{
+			{
+				Entry: credential.Entry{
+					EnvVar:   "GITHUB_TOKEN",
+					Provider: "github",
+				},
+				Value: "resolved-github-token",
+			},
+		},
+	)
+
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "GITHUB_TOKEN=resolved-github-token") {
+		t.Fatalf("buildEnv() missing resolved github token: %q", joined)
+	}
+	if !strings.Contains(joined, "LINEAR_API_KEY=literal-linear-token") {
+		t.Fatalf("buildEnv() missing literal linear token: %q", joined)
 	}
 }

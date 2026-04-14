@@ -2,15 +2,12 @@
 package credential
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"regexp"
-	"strings"
 )
 
 // placeholder matches {{kontext:<provider>}} or {{kontext:<provider>/<resource>}} patterns.
-var placeholder = regexp.MustCompile(`\{\{kontext:([^}]+)\}\}`)
+var placeholder = regexp.MustCompile(`^\{\{kontext:([^}]+)\}\}$`)
 
 // Entry represents a single credential placeholder from the env template.
 type Entry struct {
@@ -36,45 +33,11 @@ type Resolved struct {
 
 // ParseTemplate reads an env template file and extracts credential placeholders.
 func ParseTemplate(path string) ([]Entry, error) {
-	f, err := os.Open(path)
+	doc, err := LoadTemplateFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("open env template: %w", err)
+		return nil, fmt.Errorf("parse template: %w", err)
 	}
-	defer f.Close()
-
-	var entries []Entry
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-
-		envVar := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		matches := placeholder.FindStringSubmatch(value)
-		if matches == nil {
-			continue
-		}
-
-		providerSpec := matches[1]
-		provider, resource, _ := strings.Cut(providerSpec, "/")
-
-		entries = append(entries, Entry{
-			EnvVar:   envVar,
-			Provider: provider,
-			Resource: resource,
-			Raw:      matches[0],
-		})
-	}
-
-	return entries, scanner.Err()
+	return doc.Entries, nil
 }
 
 // BuildEnv converts resolved credentials into environment variable assignments.
