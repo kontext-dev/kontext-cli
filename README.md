@@ -62,7 +62,7 @@ kontext start --agent claude
 
 - **One command to launch Claude Code:** `kontext start --agent claude` — no config files, no Docker, no setup scripts
 - **Ephemeral credentials:** short-lived tokens scoped to the session, automatically expired on exit. No more long-lived API keys in `.env` files
-- **Managed local env file:** the CLI creates and updates a local, gitignored `.env.kontext` with managed preset placeholders
+- **Managed local env file:** the CLI creates and updates a local `.env.kontext` with managed preset placeholders
 - **Governance telemetry:** Claude hook events are streamed to the backend with user, session, and org attribution
 - **Secure by default:** OIDC authentication, system keyring storage, RFC 8693 token exchange, AES-256-GCM encryption at rest
 - **Lean runtime:** native Go binary, no local daemon install, no Node/Python runtime required
@@ -77,7 +77,7 @@ GITHUB_TOKEN={{kontext:github}}
 LINEAR_API_KEY={{kontext:linear}}
 ```
 
-This file is local and gitignored by default. The CLI may append more preset provider placeholders later if your org attaches them to the shared Kontext CLI application. Literal values you add stay untouched. Providers connected after the agent has already started become available on the next `kontext start`.
+This file is local. Keep `.env.kontext` out of source control in repos that do not already ignore it. The CLI may append more preset provider placeholders later if your org attaches them to the shared Kontext CLI application. Literal values you add stay untouched. Providers connected after the agent has already started become available on the next `kontext start`.
 
 ## Supported Agents
 
