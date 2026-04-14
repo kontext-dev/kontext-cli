@@ -117,6 +117,28 @@ func TestEnsureManagedTemplateDoesNotReportCollisionForQuotedManagedPlaceholder(
 	}
 }
 
+func TestEnsureManagedTemplateDoesNotReportCollisionForCommentedManagedPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".env.kontext")
+	if err := os.WriteFile(path, []byte("GITHUB_TOKEN={{kontext:github}} # personal account\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	result, err := EnsureManagedTemplate(path, []ManagedProvider{
+		{EnvVar: "GITHUB_TOKEN", Placeholder: "{{kontext:github}}", SeedOnFirstRun: true},
+	})
+	if err != nil {
+		t.Fatalf("EnsureManagedTemplate() error = %v", err)
+	}
+	if got := len(result.CollisionSkipped); got != 0 {
+		t.Fatalf("collision len = %d, want 0", got)
+	}
+	if result.Updated {
+		t.Fatal("EnsureManagedTemplate() Updated = true, want false")
+	}
+}
+
 func TestEnsureManagedTemplateAppendsNonSeededManagedProvidersOnExistingFiles(t *testing.T) {
 	t.Parallel()
 
@@ -191,6 +213,26 @@ func TestLoadTemplateFileAcceptsQuotedPlaceholders(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), ".env.kontext")
 	if err := os.WriteFile(path, []byte("GITHUB_TOKEN=\"{{kontext:github}}\"\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	doc, err := LoadTemplateFile(path)
+	if err != nil {
+		t.Fatalf("LoadTemplateFile() error = %v", err)
+	}
+	if got, want := len(doc.Entries), 1; got != want {
+		t.Fatalf("entries len = %d, want %d", got, want)
+	}
+	if got := doc.Entries[0].Raw; got != "{{kontext:github}}" {
+		t.Fatalf("entry raw = %q, want %q", got, "{{kontext:github}}")
+	}
+}
+
+func TestLoadTemplateFileAcceptsPlaceholdersWithInlineComments(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".env.kontext")
+	if err := os.WriteFile(path, []byte("GITHUB_TOKEN={{kontext:github}} # personal account\n"), 0o600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 

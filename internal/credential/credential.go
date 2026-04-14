@@ -12,22 +12,74 @@ var placeholder = regexp.MustCompile(`^\{\{kontext:([^}]+)\}\}$`)
 
 func normalizePlaceholderValue(value string) string {
 	trimmed := strings.TrimSpace(value)
-	if len(trimmed) < 2 {
-		return trimmed
+	if idx := inlineCommentIndex(trimmed); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
 	}
 
-	if (trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"') ||
-		(trimmed[0] == '\'' && trimmed[len(trimmed)-1] == '\'') {
-		return strings.TrimSpace(trimmed[1 : len(trimmed)-1])
-	}
-
-	return trimmed
+	return trimMatchingQuotes(trimmed)
 }
 
 // NormalizeEnvValue trims surrounding quotes from dotenv-style values so the
 // launched process receives the literal token, not the quote characters.
 func NormalizeEnvValue(value string) string {
-	return normalizePlaceholderValue(value)
+	return trimMatchingQuotes(strings.TrimSpace(value))
+}
+
+func trimMatchingQuotes(value string) string {
+	if len(value) < 2 {
+		return value
+	}
+
+	if (value[0] == '"' && value[len(value)-1] == '"') ||
+		(value[0] == '\'' && value[len(value)-1] == '\'') {
+		return strings.TrimSpace(value[1 : len(value)-1])
+	}
+
+	return value
+}
+
+func inlineCommentIndex(value string) int {
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		switch ch {
+		case '\\':
+			if inDouble {
+				escaped = true
+			}
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			if !inSingle && !inDouble && i > 0 && isInlineCommentWhitespace(value[i-1]) {
+				return i
+			}
+		}
+	}
+
+	return -1
+}
+
+func isInlineCommentWhitespace(ch byte) bool {
+	switch ch {
+	case ' ', '\t':
+		return true
+	default:
+		return false
+	}
 }
 
 // Entry represents a single credential placeholder from the env template.
