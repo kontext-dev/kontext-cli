@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/kontext-security/kontext-cli/compare/v0.2.2...v0.3.0) (2026-04-14)
+
+
+### Features
+
+* sync managed CLI env placeholders ([#61](https://github.com/kontext-security/kontext-cli/issues/61)) ([ccd60be](https://github.com/kontext-security/kontext-cli/commit/ccd60bef83b225c48088385b89b75d84b9a06a30))
+
 ## [0.2.2](https://github.com/kontext-security/kontext-cli/compare/v0.2.1...v0.2.2) (2026-04-14)
 
 
