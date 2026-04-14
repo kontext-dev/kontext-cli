@@ -8,7 +8,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/kontext-dev/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/agent"
 )
 
 // Run processes a single hook event. Called by `kontext hook --agent <name>`.

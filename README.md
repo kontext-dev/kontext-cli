@@ -6,7 +6,7 @@
 
 Store Credentials. Inject At Runtime. Agents Never Store The Keys.
 
-[Website](https://kontext.security) · [Documentation](https://kontext.security/docs) · [Discord](https://discord.gg/gw9UpFUhyY)
+[Website](https://kontext.security) · [Documentation](https://docs.kontext.security/getting-started/welcome) · [Discord](https://discord.gg/gw9UpFUhyY)
 
 </div>
 
@@ -21,14 +21,14 @@ Kontext CLI is an open-source command-line tool that wraps AI coding agents with
 ## Quick Start
 
 ```bash
-brew install kontext-dev/tap/kontext
+brew install kontext-security/tap/kontext
 ```
 
 If you prefer a direct binary install, download the latest GitHub Release instead:
 
 ```bash
 tmpdir="$(mktemp -d)" \
-  && gh release download --repo kontext-dev/kontext-cli --pattern 'kontext_*_darwin_arm64.tar.gz' --dir "$tmpdir" \
+  && gh release download --repo kontext-security/kontext-cli --pattern 'kontext_*_darwin_arm64.tar.gz' --dir "$tmpdir" \
   && archive="$(find "$tmpdir" -maxdepth 1 -name 'kontext_*_darwin_arm64.tar.gz' -print -quit)" \
   && tar -xzf "$archive" -C "$tmpdir" \
   && sudo install -m 0755 "$tmpdir/kontext" /usr/local/bin/kontext
@@ -130,7 +130,7 @@ ln -sf $(pwd)/bin/kontext ~/.local/bin/kontext
 
 ## Protocol
 
-Service definitions: [kontext-dev/proto `agent.proto`](https://github.com/kontext-dev/proto/blob/main/proto/kontext/agent/v1/agent.proto)
+Service definitions: [kontext-security/proto `agent.proto`](https://github.com/kontext-security/proto/blob/main/proto/kontext/agent/v1/agent.proto)
 
 The CLI communicates with the Kontext backend exclusively via ConnectRPC. Hook handlers communicate with the sidecar over a Unix socket using length-prefixed JSON.
 

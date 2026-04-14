@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/kontext-dev/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/agent"
 )
 
 func init() {

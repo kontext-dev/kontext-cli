@@ -592,9 +592,9 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\rCreateSession\x12&.kontext.agent.v1.CreateSessionRequest\x1a'.kontext.agent.v1.CreateSessionResponse\x12T\n" +
 	"\tHeartbeat\x12\".kontext.agent.v1.HeartbeatRequest\x1a#.kontext.agent.v1.HeartbeatResponse\x12W\n" +
 	"\n" +
-	"EndSession\x12#.kontext.agent.v1.EndSessionRequest\x1a$.kontext.agent.v1.EndSessionResponseB\xc5\x01\n" +
+	"EndSession\x12#.kontext.agent.v1.EndSessionRequest\x1a$.kontext.agent.v1.EndSessionResponseB\xca\x01\n" +
 	"\x14com.kontext.agent.v1B\n" +
-	"AgentProtoP\x01Z?github.com/kontext-dev/kontext-cli/gen/kontext/agent/v1;agentv1\xa2\x02\x03KAX\xaa\x02\x10Kontext.Agent.V1\xca\x02\x10Kontext\\Agent\\V1\xe2\x02\x1cKontext\\Agent\\V1\\GPBMetadata\xea\x02\x12Kontext::Agent::V1b\x06proto3"
+	"AgentProtoP\x01ZDgithub.com/kontext-security/kontext-cli/gen/kontext/agent/v1;agentv1\xa2\x02\x03KAX\xaa\x02\x10Kontext.Agent.V1\xca\x02\x10Kontext\\Agent\\V1\xe2\x02\x1cKontext\\Agent\\V1\\GPBMetadata\xea\x02\x12Kontext::Agent::V1b\x06proto3"
 
 var (
 	file_kontext_agent_v1_agent_proto_rawDescOnce sync.Once

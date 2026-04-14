@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	repo     = "kontext-dev/kontext-cli"
+	repo     = "kontext-security/kontext-cli"
 	cacheTTL = 24 * time.Hour
 )
 

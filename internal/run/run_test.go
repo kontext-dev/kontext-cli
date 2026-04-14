@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-dev/kontext-cli/internal/auth"
-	"github.com/kontext-dev/kontext-cli/internal/credential"
+	"github.com/kontext-security/kontext-cli/internal/auth"
+	"github.com/kontext-security/kontext-cli/internal/credential"
 )
 
 func TestFilterArgs(t *testing.T) {
