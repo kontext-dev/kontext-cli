@@ -22,7 +22,7 @@ func normalizePlaceholderValue(value string) string {
 // NormalizeEnvValue trims surrounding quotes from dotenv-style values so the
 // launched process receives the literal token, not the quote characters.
 func NormalizeEnvValue(value string) string {
-	return trimMatchingQuotes(strings.TrimSpace(value))
+	return normalizePlaceholderValue(value)
 }
 
 func trimMatchingQuotes(value string) string {

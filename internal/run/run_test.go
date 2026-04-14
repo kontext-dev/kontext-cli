@@ -638,6 +638,52 @@ func TestBuildEnvNormalizesQuotedLiteralValues(t *testing.T) {
 	}
 }
 
+func TestBuildEnvStripsInlineCommentsFromLiteralValues(t *testing.T) {
+	t.Parallel()
+
+	env := buildEnv(
+		&credential.TemplateFile{
+			ExistingValues: map[string]string{
+				"OPENAI_API_KEY": "sk-test-token # production",
+				"CALLBACK_URL":   "\"https://example.com/callback\" # main callback",
+			},
+		},
+		nil,
+	)
+
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "OPENAI_API_KEY=sk-test-token") {
+		t.Fatalf("buildEnv() missing stripped literal token: %q", joined)
+	}
+	if strings.Contains(joined, "OPENAI_API_KEY=sk-test-token # production") {
+		t.Fatalf("buildEnv() preserved inline comment on token: %q", joined)
+	}
+	if !strings.Contains(joined, "CALLBACK_URL=https://example.com/callback") {
+		t.Fatalf("buildEnv() missing stripped callback url: %q", joined)
+	}
+	if strings.Contains(joined, "CALLBACK_URL=\"https://example.com/callback\" # main callback") {
+		t.Fatalf("buildEnv() preserved inline comment on callback url: %q", joined)
+	}
+}
+
+func TestBuildEnvPreservesLiteralHashFragmentsWithoutWhitespace(t *testing.T) {
+	t.Parallel()
+
+	env := buildEnv(
+		&credential.TemplateFile{
+			ExistingValues: map[string]string{
+				"CALLBACK_URL": "https://example.com/callback#fragment",
+			},
+		},
+		nil,
+	)
+
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "CALLBACK_URL=https://example.com/callback#fragment") {
+		t.Fatalf("buildEnv() lost url fragment: %q", joined)
+	}
+}
+
 type recordingSessionEnder struct {
 	sessionID string
 	calls     int
