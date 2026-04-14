@@ -701,9 +701,20 @@ func classifyCredentialFailure(
 	switch result.Error {
 	case "provider_required", "provider_not_configured", "provider_reauthorization_required":
 		return failureDisconnected
+	case "invalid_target":
+		if isLegacyDisconnectedInvalidTarget(result.ErrorDesc) {
+			return failureDisconnected
+		}
+		return ""
 	default:
 		return ""
 	}
+}
+
+func isLegacyDisconnectedInvalidTarget(desc string) bool {
+	normalized := strings.ToLower(desc)
+	return strings.Contains(normalized, "not connected") ||
+		strings.Contains(normalized, "not allowed")
 }
 
 func needsGatewayAccessReauthentication(err error) bool {
