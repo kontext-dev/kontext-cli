@@ -83,6 +83,14 @@ func Start(ctx context.Context, opts Options) error {
 	credentialClientID := resolveCredentialClientID(createResp.AgentId, opts.ClientID)
 	fmt.Fprintf(os.Stderr, "✓ Session: %s (%s)\n", createResp.SessionName, truncateID(sessionID))
 
+	var sessionDir string
+	defer func() {
+		endManagedSession(client, sessionID, os.Stderr)
+		if sessionDir != "" {
+			os.RemoveAll(sessionDir)
+		}
+	}()
+
 	// 4. Bootstrap the shared CLI application and sync the local env file.
 	templateExists := false
 	if _, err := os.Stat(opts.TemplateFile); err == nil {
@@ -172,7 +180,7 @@ func Start(ctx context.Context, opts Options) error {
 	// 6. Start sidecar
 	// Use /tmp (not $TMPDIR) with a short ID to keep the Unix socket path
 	// under macOS's 104-byte sun_path limit.
-	sessionDir := filepath.Join("/tmp", "kontext", truncateID(sessionID))
+	sessionDir = filepath.Join("/tmp", "kontext", truncateID(sessionID))
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
@@ -202,16 +210,19 @@ func Start(ctx context.Context, opts Options) error {
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
 	agentErr := launchAgentWithSettings(ctx, opts.Agent, env, opts.Args, settingsPath)
 
-	// 10. Teardown (always runs, even on non-zero agent exit)
+	return agentErr
+}
+
+type sessionEnder interface {
+	EndSession(context.Context, string) error
+}
+
+func endManagedSession(client sessionEnder, sessionID string, out io.Writer) {
 	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_ = client.EndSession(endCtx, sessionID)
-	fmt.Fprintf(os.Stderr, "\n✓ Session ended (%s)\n", truncateID(sessionID))
-
-	os.RemoveAll(sessionDir)
-
-	return agentErr
+	fmt.Fprintf(out, "\n✓ Session ended (%s)\n", truncateID(sessionID))
 }
 
 // ensureSession loads the session or triggers an interactive login.

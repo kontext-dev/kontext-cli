@@ -1,6 +1,7 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -517,5 +518,35 @@ func TestBuildEnvUsesLiteralValuesAndResolvedPlaceholders(t *testing.T) {
 	}
 	if !strings.Contains(joined, "LINEAR_API_KEY=literal-linear-token") {
 		t.Fatalf("buildEnv() missing literal linear token: %q", joined)
+	}
+}
+
+type recordingSessionEnder struct {
+	sessionID string
+	calls     int
+}
+
+func (r *recordingSessionEnder) EndSession(_ context.Context, sessionID string) error {
+	r.calls++
+	r.sessionID = sessionID
+	return nil
+}
+
+func TestEndManagedSessionEndsTheManagedSession(t *testing.T) {
+	t.Parallel()
+
+	client := &recordingSessionEnder{}
+	var output bytes.Buffer
+
+	endManagedSession(client, "session-1234567890", &output)
+
+	if client.calls != 1 {
+		t.Fatalf("EndSession calls = %d, want 1", client.calls)
+	}
+	if client.sessionID != "session-1234567890" {
+		t.Fatalf("EndSession sessionID = %q, want %q", client.sessionID, "session-1234567890")
+	}
+	if got := output.String(); !strings.Contains(got, "Session ended") {
+		t.Fatalf("output = %q, want session-ended message", got)
 	}
 }

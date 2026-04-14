@@ -95,6 +95,32 @@ func TestEnsureManagedTemplateReportsCollisionWithoutOverwriting(t *testing.T) {
 	}
 }
 
+func TestEnsureManagedTemplateAppendsNonSeededManagedProvidersOnExistingFiles(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".env.kontext")
+	if err := os.WriteFile(path, []byte("GITHUB_TOKEN={{kontext:github}}\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	result, err := EnsureManagedTemplate(path, []ManagedProvider{
+		{EnvVar: "GITHUB_TOKEN", Placeholder: "{{kontext:github}}", SeedOnFirstRun: true},
+		{EnvVar: "SLACK_TOKEN", Placeholder: "{{kontext:slack}}", SeedOnFirstRun: false},
+	})
+	if err != nil {
+		t.Fatalf("EnsureManagedTemplate() error = %v", err)
+	}
+	if !result.Updated {
+		t.Fatal("EnsureManagedTemplate() Updated = false, want true")
+	}
+	if got, want := len(result.Added), 1; got != want {
+		t.Fatalf("EnsureManagedTemplate() added len = %d, want %d", got, want)
+	}
+	if got := result.Added[0].EnvVar; got != "SLACK_TOKEN" {
+		t.Fatalf("EnsureManagedTemplate() added env var = %q, want %q", got, "SLACK_TOKEN")
+	}
+}
+
 func TestLoadTemplateFileMarksDuplicateKeysUnsafeForMutation(t *testing.T) {
 	t.Parallel()
 
