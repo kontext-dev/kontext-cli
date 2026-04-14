@@ -329,6 +329,53 @@ func TestFetchConnectURLWithGatewayLoginFallback(t *testing.T) {
 	}
 }
 
+func TestFetchConnectURLForConnectFlowSkipsLoginWhenNonInteractive(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer":"%s","authorization_endpoint":"%s/oauth2/auth","token_endpoint":"%s/oauth2/token","jwks_uri":"%s/.well-known/jwks.json"}`, server.URL, server.URL, server.URL, server.URL)))
+		case "/oauth2/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":"invalid_scope","error_description":"Requested scope 'gateway:access' exceeds subject token scopes"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	session := &auth.Session{
+		IssuerURL:   server.URL,
+		AccessToken: "stale-access-token",
+	}
+
+	var loginCalls int
+	login := func(ctx context.Context, issuerURL, clientID string, scopes ...string) (*auth.LoginResult, error) {
+		loginCalls++
+		return nil, fmt.Errorf("login should not be called")
+	}
+
+	_, err := fetchConnectURLForConnectFlow(
+		context.Background(),
+		session,
+		"app_agent-123",
+		false,
+		login,
+	)
+	if err == nil {
+		t.Fatal("fetchConnectURLForConnectFlow() error = nil, want non-nil")
+	}
+	if loginCalls != 0 {
+		t.Fatalf("loginCalls = %d, want 0", loginCalls)
+	}
+	if !needsGatewayAccessReauthentication(err) {
+		t.Fatalf("err = %v, want gateway reauthentication failure", err)
+	}
+}
+
 func TestExchangeCredentialUsesProvidedClientID(t *testing.T) {
 	t.Parallel()
 

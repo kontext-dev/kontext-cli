@@ -271,8 +271,18 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 		return resolved, nil
 	}
 
-	connectURL, connectErr := fetchConnectURLWithGatewayLoginFallback(ctx, session, credentialClientID, auth.Login)
+	interactive := isInteractiveTerminal()
+	connectURL, connectErr := fetchConnectURLForConnectFlow(
+		ctx,
+		session,
+		credentialClientID,
+		interactive,
+		auth.Login,
+	)
 	if connectErr != nil {
+		if !interactive && needsGatewayAccessReauthentication(connectErr) {
+			fmt.Fprintln(os.Stderr, "⚠ Non-interactive session detected. Re-run `kontext start` in an interactive terminal to authorize hosted connect.")
+		}
 		fmt.Fprintf(os.Stderr, "⚠ Could not create hosted connect session (%v)\n", connectErr)
 		printLaunchWarnings(entryByEnvVar, failures)
 		return resolved, nil
@@ -282,7 +292,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	fmt.Fprintf(os.Stderr, "\nHosted connect is available for: %s\n", providerList)
 	fmt.Fprintf(os.Stderr, "  %s\n", connectURL)
 
-	if !isInteractiveTerminal() {
+	if !interactive {
 		fmt.Fprintln(os.Stderr, "⚠ Non-interactive session detected. Open this URL in a browser, then rerun `kontext start`.")
 		printLaunchWarnings(entryByEnvVar, failures)
 		return resolved, nil
@@ -453,6 +463,25 @@ func isInteractiveTerminal() bool {
 }
 
 type loginFunc func(context.Context, string, string, ...string) (*auth.LoginResult, error)
+
+func fetchConnectURLForConnectFlow(
+	ctx context.Context,
+	session *auth.Session,
+	credentialClientID string,
+	interactive bool,
+	login loginFunc,
+) (string, error) {
+	if !interactive {
+		return fetchConnectURL(ctx, session, credentialClientID)
+	}
+
+	return fetchConnectURLWithGatewayLoginFallback(
+		ctx,
+		session,
+		credentialClientID,
+		login,
+	)
+}
 
 func fetchConnectURLWithGatewayLoginFallback(
 	ctx context.Context,
