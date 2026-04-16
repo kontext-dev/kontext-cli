@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +17,12 @@ import (
 	"github.com/cli/browser"
 	"golang.org/x/oauth2"
 )
+
+// ErrInvalidGrant indicates that the refresh token has been permanently
+// rejected by the authorization server (RFC 6749 "invalid_grant"). Retrying
+// with the same refresh token will not succeed — the user must re-authenticate
+// via `kontext login`. Callers should use errors.Is to detect this condition.
+var ErrInvalidGrant = errors.New("refresh token rejected (invalid_grant)")
 
 const (
 	// Well-known public client for the Kontext CLI. No secret.
@@ -217,6 +224,10 @@ func RefreshSession(ctx context.Context, session *Session) (*Session, error) {
 
 	newToken, err := tokenSource.Token()
 	if err != nil {
+		var retrieveErr *oauth2.RetrieveError
+		if errors.As(err, &retrieveErr) && retrieveErr.ErrorCode == "invalid_grant" {
+			return nil, fmt.Errorf("refresh token: %w", ErrInvalidGrant)
+		}
 		return nil, fmt.Errorf("refresh token: %w", err)
 	}
 
