@@ -20,6 +20,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	"github.com/kontext-security/kontext-cli/internal/credential"
+	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
 
 func TestFilterArgs(t *testing.T) {
@@ -412,6 +413,7 @@ func TestFetchConnectURLWithGatewayLoginFallback(t *testing.T) {
 
 	session := &auth.Session{
 		IssuerURL:   server.URL,
+		Subject:     "user-123",
 		AccessToken: "stale-access-token",
 	}
 
@@ -430,6 +432,7 @@ func TestFetchConnectURLWithGatewayLoginFallback(t *testing.T) {
 
 		result := &auth.LoginResult{Session: &auth.Session{
 			IssuerURL:   server.URL,
+			Subject:     "user-123",
 			AccessToken: "gateway-login-token",
 		}}
 		return result, nil
@@ -457,6 +460,132 @@ func TestFetchConnectURLWithGatewayLoginFallback(t *testing.T) {
 	want := "https://app.kontext.security/providers/connect#handshake=session-123"
 	if got != want {
 		t.Fatalf("fetchConnectURLWithGatewayLoginFallback() = %q, want %q", got, want)
+	}
+}
+
+func TestFetchConnectURLWithGatewayLoginFallbackRejectsAccountMismatch(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	var tokenExchangeCalls int
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer":"%s","authorization_endpoint":"%s/oauth2/auth","token_endpoint":"%s/oauth2/token","jwks_uri":"%s/.well-known/jwks.json"}`, server.URL, server.URL, server.URL, server.URL)))
+		case "/oauth2/token":
+			tokenExchangeCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":"invalid_scope","error_description":"Requested scope 'gateway:access' exceeds subject token scopes"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	session := &auth.Session{
+		IssuerURL:   server.URL,
+		Subject:     "active-user",
+		AccessToken: "stale-access-token",
+	}
+	session.User.Email = "active@example.com"
+
+	login := func(ctx context.Context, issuerURL, clientID string, scopes ...string) (*auth.LoginResult, error) {
+		result := &auth.LoginResult{Session: &auth.Session{
+			IssuerURL:   server.URL,
+			Subject:     "browser-user",
+			AccessToken: "gateway-login-token",
+		}}
+		result.Session.User.Email = "browser@example.com"
+		return result, nil
+	}
+
+	_, err := fetchConnectURLWithGatewayLoginFallback(
+		context.Background(),
+		session,
+		"app_agent-123",
+		login,
+	)
+	if err == nil {
+		t.Fatal("fetchConnectURLWithGatewayLoginFallback() error = nil, want mismatch")
+	}
+	if !strings.Contains(err.Error(), "different account") {
+		t.Fatalf("error = %q, want different account message", err)
+	}
+	if summary := connectFailureSummary(err); !strings.Contains(summary, "active@example.com") || !strings.Contains(summary, "browser@example.com") {
+		t.Fatalf("connectFailureSummary() = %q, want account labels", summary)
+	}
+	if tokenExchangeCalls != 1 {
+		t.Fatalf("tokenExchangeCalls = %d, want only stale-token attempt", tokenExchangeCalls)
+	}
+}
+
+func TestResolveCredentialsReturnsIdentityMismatchError(t *testing.T) {
+	t.Parallel()
+
+	fakeFetcher := func(
+		ctx context.Context,
+		session *auth.Session,
+		credentialClientID string,
+		interactive bool,
+		login loginFunc,
+	) (string, error) {
+		return "", &identityMismatchError{
+			activeLabel:  "active@example.com",
+			browserLabel: "browser@example.com",
+		}
+	}
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"issuer":"%s","authorization_endpoint":"%s/oauth2/auth","token_endpoint":"%s/oauth2/token","jwks_uri":"%s/.well-known/jwks.json"}`, server.URL, server.URL, server.URL, server.URL)))
+		case "/oauth2/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"error":"provider_required","error_description":"User has not configured provider 'Linear Stub'","failure_reason":"disconnected_or_reauth_required","provider_name":"Linear Stub","provider_id":"provider-linear"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	session := &auth.Session{
+		IssuerURL:   server.URL,
+		AccessToken: "test-access-token",
+	}
+
+	_, err := resolveCredentials(
+		context.Background(),
+		session,
+		[]credential.Entry{{EnvVar: "LINEAR_API_KEY", Provider: "linear"}},
+		"app_agent-123",
+		diagnostic.New(io.Discard, false),
+		fakeFetcher,
+	)
+	if err == nil {
+		t.Fatal("resolveCredentials() error = nil, want mismatch")
+	}
+
+	var mismatch *identityMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("resolveCredentials() error = %T, want *identityMismatchError", err)
+	}
+}
+
+func TestEnsureSameIdentityComparesIssuerAndSubject(t *testing.T) {
+	t.Parallel()
+
+	active := &auth.Session{IssuerURL: "https://issuer-a.example", Subject: "same-subject"}
+	browser := &auth.Session{IssuerURL: "https://issuer-b.example", Subject: "same-subject"}
+
+	err := ensureSameIdentity(active, browser)
+	if err == nil {
+		t.Fatal("ensureSameIdentity() error = nil, want issuer mismatch")
+	}
+	if !strings.Contains(err.Error(), "different account") {
+		t.Fatalf("ensureSameIdentity() error = %q, want different account", err)
 	}
 }
 

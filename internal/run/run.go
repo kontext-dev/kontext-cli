@@ -184,7 +184,7 @@ func Start(ctx context.Context, opts Options) error {
 	//    so reading session fields is safe without synchronization)
 	var resolved []credential.Resolved
 	if len(templateDoc.Entries) > 0 {
-		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics)
+		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics, fetchConnectURLForConnectFlow)
 		if err != nil {
 			return err
 		}
@@ -272,8 +272,10 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 	return result.Session, nil
 }
 
+type connectURLFetcher func(ctx context.Context, session *auth.Session, credentialClientID string, interactive bool, login loginFunc) (string, error)
+
 // resolveCredentials exchanges each template entry for a live credential.
-func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry, credentialClientID string, diagnostics diagnostic.Logger) ([]credential.Resolved, error) {
+func resolveCredentials(ctx context.Context, session *auth.Session, entries []credential.Entry, credentialClientID string, diagnostics diagnostic.Logger, fetchConnect connectURLFetcher) ([]credential.Resolved, error) {
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	resolved := make([]credential.Resolved, 0, len(entries))
 	failures := make(map[string]error)
@@ -300,7 +302,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	}
 
 	interactive := isInteractiveTerminal()
-	connectURL, connectErr := fetchConnectURLForConnectFlow(
+	connectURL, connectErr := fetchConnect(
 		ctx,
 		session,
 		credentialClientID,
@@ -309,6 +311,10 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 	)
 	if connectErr != nil {
 		diagnostics.Printf("hosted connect session failed: %v\n", connectErr)
+		var mismatch *identityMismatchError
+		if errors.As(connectErr, &mismatch) {
+			return nil, connectErr
+		}
 		if !interactive && needsGatewayAccessReauthentication(connectErr) {
 			fmt.Fprintln(os.Stderr, "⚠ Non-interactive session detected. Re-run `kontext start` in an interactive terminal to authorize hosted connect.")
 		}
@@ -443,6 +449,10 @@ func credentialFailureSummary(err error) string {
 }
 
 func connectFailureSummary(err error) string {
+	var mismatch *identityMismatchError
+	if errors.As(err, &mismatch) {
+		return mismatch.Error()
+	}
 	if needsGatewayAccessReauthentication(err) {
 		return "gateway access needs authorization"
 	}
@@ -560,6 +570,9 @@ func fetchConnectURLWithGatewayLoginFallback(
 	if err != nil {
 		return "", fmt.Errorf("authorize gateway access: %w", err)
 	}
+	if err := ensureSameIdentity(session, result.Session); err != nil {
+		return "", err
+	}
 
 	gatewayToken, err := exchangeGatewayToken(ctx, result.Session, credentialClientID)
 	if err != nil {
@@ -567,6 +580,43 @@ func fetchConnectURLWithGatewayLoginFallback(
 	}
 
 	return fetchConnectURLWithGatewayToken(ctx, result.Session.IssuerURL, gatewayToken)
+}
+
+func ensureSameIdentity(active, browser *auth.Session) error {
+	activeKey, err := active.IdentityKey()
+	if err != nil {
+		return err
+	}
+	browserKey, err := browser.IdentityKey()
+	if err != nil {
+		return fmt.Errorf("browser authorization session is missing identity information: %w", err)
+	}
+	if activeKey == browserKey {
+		return nil
+	}
+
+	activeLabel := active.DisplayIdentity()
+	if activeLabel == "" {
+		activeLabel = activeKey
+	}
+	browserLabel := browser.DisplayIdentity()
+	if browserLabel == "" {
+		browserLabel = browserKey
+	}
+	return &identityMismatchError{activeLabel: activeLabel, browserLabel: browserLabel}
+}
+
+type identityMismatchError struct {
+	activeLabel  string
+	browserLabel string
+}
+
+func (e *identityMismatchError) Error() string {
+	return fmt.Sprintf(
+		"browser authorization used a different account (active CLI account: %s; browser account: %s). Run `kontext login` with the account you want to use, then retry",
+		e.activeLabel,
+		e.browserLabel,
+	)
 }
 
 func fetchConnectURL(ctx context.Context, session *auth.Session, clientID string) (string, error) {
