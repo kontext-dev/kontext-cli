@@ -902,13 +902,15 @@ func supportedAgents() []string {
 
 // newSessionTokenSource returns a TokenSource that transparently refreshes
 // the OIDC access token when it expires, so long-running sessions keep working.
+// If forceRefresh is true, the token is refreshed unconditionally (used by
+// the transport layer after receiving a 401 from the server).
 func newSessionTokenSource(ctx context.Context, session *auth.Session, diagnostics diagnostic.Logger) backend.TokenSource {
 	mu := &sync.Mutex{}
-	return func() (string, error) {
+	return func(forceRefresh bool) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
-		if !session.IsExpired() {
+		if !forceRefresh && !session.IsExpired() {
 			return session.AccessToken, nil
 		}
 
@@ -916,6 +918,8 @@ func newSessionTokenSource(ctx context.Context, session *auth.Session, diagnosti
 		if err != nil {
 			return "", fmt.Errorf("token expired and refresh failed: %w", err)
 		}
+
+		fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
 
 		// Persist so other processes (and the next `kontext start`) see the new token
 		if saveErr := auth.SaveSession(refreshed); saveErr != nil {
