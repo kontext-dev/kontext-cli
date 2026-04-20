@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/kontext-security/kontext-cli/compare/v0.4.0...v0.4.1) (2026-04-20)
+
+
+### Bug Fixes
+
+* auto-refresh OIDC token with proactive + reactive strategy ([#17](https://github.com/kontext-security/kontext-cli/issues/17)) ([c5492d3](https://github.com/kontext-security/kontext-cli/commit/c5492d36a14acc5b412a41f0a9815c706255218b))
+
 ## [0.4.0](https://github.com/kontext-security/kontext-cli/compare/v0.3.0...v0.4.0) (2026-04-18)
 
 
