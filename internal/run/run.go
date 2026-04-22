@@ -209,21 +209,33 @@ func Start(ctx context.Context, opts Options) error {
 	}
 	defer sc.Stop()
 
-	// 7. Generate hook settings
+	// 7-9: per-agent session prep + launch
 	kontextBin, _ := os.Executable()
-	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
-	if err != nil {
-		return fmt.Errorf("generate settings: %w", err)
-	}
 
-	// 8. Build env
 	env := buildEnv(templateDoc, resolved)
 	env = append(env, "KONTEXT_SOCKET="+sc.SocketPath())
 	env = append(env, "KONTEXT_SESSION_ID="+sessionID)
 
-	// 9. Launch agent with hooks
+	var prefixArgs []string
+	switch opts.Agent {
+	case "claude":
+		settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
+		if err != nil {
+			return fmt.Errorf("generate settings: %w", err)
+		}
+		prefixArgs = []string{"--settings", settingsPath}
+	case "hermes":
+		_, _, extraEnv, err := buildHermesLaunch(sessionDir, kontextBin, sc.SocketPath(), sessionID, resolved)
+		if err != nil {
+			return fmt.Errorf("build hermes home: %w", err)
+		}
+		env = append(env, extraEnv...)
+	default:
+		return fmt.Errorf("unsupported agent: %s", opts.Agent)
+	}
+
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
-	agentErr := launchAgentWithSettings(ctx, opts.Agent, agentPath, env, opts.Args, settingsPath)
+	agentErr := launchAgent(ctx, opts.Agent, agentPath, env, opts.Args, prefixArgs)
 
 	return agentErr
 }
@@ -1000,11 +1012,9 @@ func validateExecutable(agentName, path string) (string, error) {
 	return path, nil
 }
 
-func launchAgentWithSettings(_ context.Context, agentName, binaryPath string, env, extraArgs []string, settingsPath string) error {
+func launchAgent(_ context.Context, agentName, binaryPath string, env, extraArgs, prefixArgs []string) error {
 	var args []string
-	if settingsPath != "" {
-		args = append(args, "--settings", settingsPath)
-	}
+	args = append(args, prefixArgs...)
 	args = append(args, filterArgs(extraArgs)...)
 
 	cmd := exec.Command(binaryPath, args...)

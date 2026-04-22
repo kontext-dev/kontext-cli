@@ -199,7 +199,7 @@ func TestPrintHostedConnectInstructionsShowsFallbackWhenBrowserOpenFails(t *test
 	}
 }
 
-func TestLaunchAgentWithSettingsReturnsAgentExitError(t *testing.T) {
+func TestLaunchAgentReturnsAgentExitError(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script launch test is POSIX-specific")
@@ -211,10 +211,10 @@ func TestLaunchAgentWithSettingsReturnsAgentExitError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := launchAgentWithSettings(context.Background(), "test-agent", path, os.Environ(), nil, "")
+	err := launchAgent(context.Background(), "test-agent", path, os.Environ(), nil, nil)
 	var exitErr *AgentExitError
 	if !errors.As(err, &exitErr) {
-		t.Fatalf("launchAgentWithSettings() error = %T, want *AgentExitError", err)
+		t.Fatalf("launchAgent() error = %T, want *AgentExitError", err)
 	}
 	if exitErr.ExitCode() != 42 {
 		t.Fatalf("ExitCode() = %d, want 42", exitErr.ExitCode())

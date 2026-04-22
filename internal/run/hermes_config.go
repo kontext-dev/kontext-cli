@@ -86,6 +86,17 @@ func writeHermesConfig(sessionDir, basePath, kontextBin, socketPath, sessionID s
 	return os.WriteFile(path, out, 0o600)
 }
 
+// buildHermesLaunch prepares the HERMES_HOME directory and returns
+// (hermesHome, extraArgs, extraEnv). Hermes takes zero extra launch args;
+// config is discovered via HERMES_HOME.
+func buildHermesLaunch(parentDir, kontextBin, socket, sessionID string, resolved []credential.Resolved) (string, []string, []string, error) {
+	home, err := BuildHermesHome(parentDir, kontextBin, socket, sessionID, resolved)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return home, nil, []string{"HERMES_HOME=" + home}, nil
+}
+
 // BuildHermesHome seeds a session-scoped HERMES_HOME under parentDir and
 // returns the absolute path to use as HERMES_HOME.
 func BuildHermesHome(parentDir, kontextBin, socketPath, sessionID string, resolved []credential.Resolved) (string, error) {
