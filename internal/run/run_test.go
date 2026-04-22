@@ -8,33 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	"github.com/kontext-security/kontext-cli/internal/credential"
 )
-
-func TestFilterArgs(t *testing.T) {
-	t.Parallel()
-
-	args := []string{
-		"--settings", "user-settings.json",
-		"--dangerously-skip-permissions",
-		"--setting-sources=local",
-		"--allowed",
-		"value",
-		"--bare",
-		"prompt",
-	}
-
-	got := filterArgs(args)
-	want := []string{"--allowed", "value", "prompt"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("filterArgs() = %#v, want %#v", got, want)
-	}
-}
 
 func TestFetchConnectURL(t *testing.T) {
 	t.Parallel()

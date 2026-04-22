@@ -22,6 +22,7 @@ import (
 
 	// Register agent adapters
 	_ "github.com/kontext-security/kontext-cli/internal/agent/claude"
+	_ "github.com/kontext-security/kontext-cli/internal/agent/codex"
 )
 
 var version = "dev"
@@ -70,7 +71,7 @@ func startCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent to launch (currently: claude)")
+	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent to launch (claude, codex)")
 	cmd.Flags().StringVar(&templateFile, "env-template", ".env.kontext", "Path to env template file")
 
 	return cmd

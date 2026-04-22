@@ -194,12 +194,9 @@ func Start(ctx context.Context, opts Options) error {
 	}
 	defer sc.Stop()
 
-	// 7. Generate hook settings
+	// 7. Resolve agent adapter + its per-session config
+	agentImpl, _ := agent.Get(opts.Agent) // already validated above
 	kontextBin, _ := os.Executable()
-	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
-	if err != nil {
-		return fmt.Errorf("generate settings: %w", err)
-	}
 
 	// 8. Build env
 	env := buildEnv(templateDoc, resolved)
@@ -208,7 +205,7 @@ func Start(ctx context.Context, opts Options) error {
 
 	// 9. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
-	agentErr := launchAgentWithSettings(ctx, opts.Agent, env, opts.Args, settingsPath)
+	agentErr := launchAgent(ctx, agentImpl, env, opts.Args, sessionDir, kontextBin)
 
 	return agentErr
 }
@@ -284,8 +281,7 @@ func resolveCredentials(ctx context.Context, session *auth.Session, entries []cr
 			fmt.Fprintln(os.Stderr, "⚠ Non-interactive session detected. Re-run `kontext start` in an interactive terminal to authorize hosted connect.")
 		}
 		fmt.Fprintf(os.Stderr, "⚠ Could not create hosted connect session (%v)\n", connectErr)
-		printLaunchWarnings(entryByEnvVar, failures)
-		return resolved, nil
+		return nil, fmt.Errorf("could not create hosted connect session: %w", connectErr)
 	}
 
 	providerList := joinEntryProviders(connectable)
@@ -807,17 +803,28 @@ func newSessionTokenSource(ctx context.Context, session *auth.Session) backend.T
 	}
 }
 
-func launchAgentWithSettings(_ context.Context, agentName string, env, extraArgs []string, settingsPath string) error {
-	binaryPath, err := exec.LookPath(agentName)
+func launchAgent(_ context.Context, a agent.Agent, env, extraArgs []string, sessionDir, kontextBin string) error {
+	prep, err := a.Prepare(sessionDir, kontextBin)
 	if err != nil {
-		return fmt.Errorf("agent %q not found in PATH: %w", agentName, err)
+		return fmt.Errorf("prepare %s: %w", a.Name(), err)
+	}
+	defer func() {
+		if cerr := a.Cleanup(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "⚠ %s cleanup: %v\n", a.Name(), cerr)
+		}
+	}()
+
+	binaryPath, err := exec.LookPath(a.Binary())
+	if err != nil {
+		return fmt.Errorf("agent %q not found in PATH: %w", a.Binary(), err)
 	}
 
-	var args []string
-	if settingsPath != "" {
-		args = append(args, "--settings", settingsPath)
+	args := append([]string{}, prep.Args...)
+	args = append(args, a.FilterUserArgs(extraArgs)...)
+
+	if len(prep.Env) > 0 {
+		env = append(append([]string{}, env...), prep.Env...)
 	}
-	args = append(args, filterArgs(extraArgs)...)
 
 	cmd := exec.Command(binaryPath, args...)
 	cmd.Stdin = os.Stdin
@@ -826,7 +833,7 @@ func launchAgentWithSettings(_ context.Context, agentName string, env, extraArgs
 	cmd.Env = env
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("launch %s: %w", agentName, err)
+		return fmt.Errorf("launch %s: %w", a.Name(), err)
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -842,49 +849,6 @@ func launchAgentWithSettings(_ context.Context, agentName string, env, extraArgs
 	close(sigCh)
 
 	return err
-}
-
-// flagName extracts the flag name from an arg, handling --flag=value syntax.
-func flagName(arg string) string {
-	if i := strings.Index(arg, "="); i != -1 {
-		return arg[:i]
-	}
-	return arg
-}
-
-func filterArgs(args []string) []string {
-	blocked := map[string]bool{
-		"--bare":                         true,
-		"--dangerously-skip-permissions": true,
-	}
-	// Flags that take a value argument — strip the flag AND the next arg.
-	blockedWithValue := map[string]bool{
-		"--settings":        true,
-		"--setting-sources": true,
-	}
-
-	var filtered []string
-	skip := false
-	for _, arg := range args {
-		if skip {
-			skip = false
-			continue
-		}
-		name := flagName(arg)
-		if blocked[name] {
-			fmt.Fprintf(os.Stderr, "⚠ Stripped blocked flag: %s\n", arg)
-			continue
-		}
-		if blockedWithValue[name] {
-			fmt.Fprintf(os.Stderr, "⚠ Stripped blocked flag: %s\n", arg)
-			if !strings.Contains(arg, "=") {
-				skip = true // skip the next arg (the value)
-			}
-			continue
-		}
-		filtered = append(filtered, arg)
-	}
-	return filtered
 }
 
 func truncateID(id string) string {

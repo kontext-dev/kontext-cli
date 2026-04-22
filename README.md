@@ -81,11 +81,16 @@ This file is local. Keep `.env.kontext` out of source control in repos that do n
 
 ## Supported Agents
 
-| Agent       | Flag             | Status  |
-| ----------- | ---------------- | ------- |
-| Claude Code | `--agent claude` | Active  |
+| Agent       | Flag             | Status                          |
+| ----------- | ---------------- | ------------------------------- |
+| Claude Code | `--agent claude` | Active                          |
+| Codex CLI   | `--agent codex`  | Active (experimental hooks)     |
 
-Cursor and Codex support are planned, but they are not shipped in this repo yet.
+Cursor support is planned, but it is not shipped in this repo yet.
+
+### Codex notes
+
+Codex governance uses the CLI's experimental hook system, enabled per-session via a managed `config.toml` (your `~/.codex/` is never touched — Kontext runs Codex with `CODEX_HOME` pointing at a session-scoped config dir). `PreToolUse` hooks fire for `shell`, `local_shell`, `apply_patch`, and MCP tool calls. Codex does not currently emit separate `read_file` / `write_file` tool events; file edits are covered via `apply_patch`.
 
 ## Architecture
 
