@@ -118,7 +118,7 @@ func splitLines(s string) []string {
 
 func TestMergeHermesConfig_NoBase(t *testing.T) {
 	dir := t.TempDir()
-	err := writeHermesConfig(dir, "", "/bin/kontext", "/tmp/x.sock", "sess-1", []string{"GITHUB_TOKEN"})
+	err := writeHermesConfig(dir, "", "/bin/kontext", "/tmp/x.sock", "sess-1", map[string]string{"GITHUB_TOKEN": "ghs_actual"})
 	if err != nil {
 		t.Fatalf("writeHermesConfig: %v", err)
 	}
@@ -148,6 +148,9 @@ func TestMergeHermesConfig_NoBase(t *testing.T) {
 	env, _ := k["env"].(map[string]any)
 	if env["KONTEXT_SESSION_ID"] != "sess-1" {
 		t.Errorf("env session id: got %v", env)
+	}
+	if env["GITHUB_TOKEN"] != "ghs_actual" {
+		t.Errorf("GITHUB_TOKEN should be inlined, got %v", env["GITHUB_TOKEN"])
 	}
 }
 

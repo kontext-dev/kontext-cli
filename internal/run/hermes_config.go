@@ -54,9 +54,10 @@ func dotenvQuote(value string) string {
 
 // writeHermesConfig writes <sessionDir>/config.yaml, merging the user's base
 // config (if basePath != "" and exists) with a `kontext` entry under
-// mcp_servers. passthroughEnv is the list of env var names whose resolved
-// values will be forwarded to the mcp-serve subprocess via the yaml env block.
-func writeHermesConfig(sessionDir, basePath, kontextBin, socketPath, sessionID string, passthroughEnv []string) error {
+// mcp_servers. passthrough is a map of env var names to their resolved values
+// which are inlined literally into the yaml env block so the mcp-serve
+// subprocess receives them directly.
+func writeHermesConfig(sessionDir, basePath, kontextBin, socketPath, sessionID string, passthrough map[string]string) error {
 	doc := map[string]any{}
 	if basePath != "" {
 		if data, err := os.ReadFile(basePath); err == nil {
@@ -80,8 +81,8 @@ func writeHermesConfig(sessionDir, basePath, kontextBin, socketPath, sessionID s
 		"KONTEXT_SESSION_ID": sessionID,
 		"KONTEXT_SOCKET":     socketPath,
 	}
-	for _, name := range passthroughEnv {
-		envMap[name] = "${" + name + "}"
+	for name, value := range passthrough {
+		envMap[name] = value
 	}
 
 	servers["kontext"] = map[string]any{
@@ -129,9 +130,9 @@ func BuildHermesHome(parentDir, kontextBin, socketPath, sessionID string, resolv
 		return "", err
 	}
 
-	passthrough := make([]string, 0, len(resolved))
+	passthrough := make(map[string]string, len(resolved))
 	for _, r := range resolved {
-		passthrough = append(passthrough, r.EnvVar)
+		passthrough[r.EnvVar] = r.Value
 	}
 
 	if err := writeHermesConfig(dir, baseConfigPath, kontextBin, socketPath, sessionID, passthrough); err != nil {
