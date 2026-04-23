@@ -279,3 +279,29 @@ func TestLoadTemplateFileAcceptsPlaceholdersWithInlineComments(t *testing.T) {
 		t.Fatalf("entry raw = %q, want %q", got, "{{kontext:github}}")
 	}
 }
+
+func TestLoadTemplateFileAcceptsAlternativeCredentialSchemes(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ".env.kontext")
+	if err := os.WriteFile(path, []byte("DB_PASSWORD={{bitwarden:domain:postgres.internal/password}}\n"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	doc, err := LoadTemplateFile(path)
+	if err != nil {
+		t.Fatalf("LoadTemplateFile() error = %v", err)
+	}
+	if got, want := len(doc.Entries), 1; got != want {
+		t.Fatalf("entries len = %d, want %d", got, want)
+	}
+	if got, want := doc.Entries[0].Scheme, "bitwarden"; got != want {
+		t.Fatalf("entry scheme = %q, want %q", got, want)
+	}
+	if got, want := doc.Entries[0].Provider, "domain:postgres.internal"; got != want {
+		t.Fatalf("entry provider = %q, want %q", got, want)
+	}
+	if got, want := doc.Entries[0].Resource, "password"; got != want {
+		t.Fatalf("entry resource = %q, want %q", got, want)
+	}
+}

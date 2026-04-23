@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// placeholder matches {{kontext:<provider>}} or {{kontext:<provider>/<resource>}} patterns.
-var placeholder = regexp.MustCompile(`^\{\{kontext:([^}]+)\}\}$`)
+// placeholder matches {{<scheme>:<provider>}} or {{<scheme>:<provider>/<resource>}} patterns.
+var placeholder = regexp.MustCompile(`^\{\{([a-z0-9][a-z0-9_-]*):([^}]+)\}\}$`)
 
 func normalizePlaceholderValue(value string) string {
 	trimmed := strings.TrimSpace(value)
@@ -84,6 +84,7 @@ func isInlineCommentWhitespace(ch byte) bool {
 
 // Entry represents a single credential placeholder from the env template.
 type Entry struct {
+	Scheme   string // e.g., "kontext" or "bitwarden"
 	EnvVar   string // e.g., "GITHUB_TOKEN"
 	Provider string // e.g., "github"
 	Resource string // e.g., "readonly" (optional, after /)
@@ -96,6 +97,14 @@ func (e Entry) Target() string {
 		return e.Provider
 	}
 	return e.Provider + "/" + e.Resource
+}
+
+// QualifiedTarget returns the target including its scheme for display.
+func (e Entry) QualifiedTarget() string {
+	if e.Scheme == "" {
+		return e.Target()
+	}
+	return e.Scheme + ":" + e.Target()
 }
 
 // Resolved is a credential entry with its resolved value.

@@ -97,7 +97,8 @@ func LoadTemplateFile(path string) (*TemplateFile, error) {
 
 		matches := placeholder.FindStringSubmatch(normalizedValue)
 		if matches != nil {
-			providerSpec := matches[1]
+			scheme := matches[1]
+			providerSpec := matches[2]
 			provider, resource, _ := strings.Cut(providerSpec, "/")
 			if strings.TrimSpace(provider) == "" {
 				assignment.invalid = &InvalidPlaceholder{
@@ -108,6 +109,7 @@ func LoadTemplateFile(path string) (*TemplateFile, error) {
 				continue
 			}
 			assignment.entry = &Entry{
+				Scheme:   scheme,
 				EnvVar:   envVar,
 				Provider: provider,
 				Resource: resource,
@@ -117,7 +119,7 @@ func LoadTemplateFile(path string) (*TemplateFile, error) {
 			continue
 		}
 
-		if strings.Contains(normalizedValue, "{{kontext:") {
+		if strings.HasPrefix(normalizedValue, "{{") && strings.Contains(normalizedValue, ":") {
 			assignment.invalid = &InvalidPlaceholder{
 				EnvVar: envVar,
 				Value:  value,

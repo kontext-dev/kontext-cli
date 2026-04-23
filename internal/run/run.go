@@ -297,7 +297,7 @@ func resolveCredentials(
 
 	for _, entry := range entries {
 		entryByEnvVar[entry.EnvVar] = entry
-		fmt.Fprintf(os.Stderr, "  %s (%s)... ", entry.EnvVar, entry.Target())
+		fmt.Fprintf(os.Stderr, "  %s (%s)... ", entry.EnvVar, entry.QualifiedTarget())
 		value, err := resolvers.resolve(ctx, entry)
 		if err != nil {
 			printCredentialFailure(entry, err, diagnostics)
