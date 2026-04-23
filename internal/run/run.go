@@ -2,7 +2,6 @@
 package run
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,8 +19,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/cli/browser"
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/agent"
@@ -186,7 +183,14 @@ func Start(ctx context.Context, opts Options) error {
 	//    so reading session fields is safe without synchronization)
 	var resolved []credential.Resolved
 	if len(templateDoc.Entries) > 0 {
-		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics, fetchConnectURLForConnectFlow)
+		resolved, err = resolveCredentials(
+			ctx,
+			session,
+			templateDoc.Entries,
+			credentialClientID,
+			diagnostics,
+			fetchConnectURLForConnectFlow,
+		)
 		if err != nil {
 			return err
 		}
@@ -285,6 +289,7 @@ func resolveCredentials(
 	diagnostics diagnostic.Logger,
 	fetchConnect connectURLFetcher,
 ) ([]credential.Resolved, error) {
+	resolvers := newCredentialResolverSetWithFetcher(session, credentialClientID, fetchConnect)
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	resolved := make([]credential.Resolved, 0, len(entries))
 	failures := make(map[string]error)
@@ -293,7 +298,7 @@ func resolveCredentials(
 	for _, entry := range entries {
 		entryByEnvVar[entry.EnvVar] = entry
 		fmt.Fprintf(os.Stderr, "  %s (%s)... ", entry.EnvVar, entry.Target())
-		value, err := exchangeCredential(ctx, session, entry, credentialClientID)
+		value, err := resolvers.resolve(ctx, entry)
 		if err != nil {
 			printCredentialFailure(entry, err, diagnostics)
 			failures[entry.EnvVar] = err
@@ -303,50 +308,19 @@ func resolveCredentials(
 		resolved = append(resolved, credential.Resolved{Entry: entry, Value: value})
 	}
 
-	connectable := unresolvedConnectableEntries(entryByEnvVar, failures)
+	connectable := resolvers.unresolvedConnectableEntries(entryByEnvVar, failures)
 	if len(connectable) == 0 {
-		printLaunchWarnings(entryByEnvVar, failures, diagnostics)
+		resolvers.printLaunchWarnings(entryByEnvVar, failures)
 		return resolved, nil
 	}
 
-	interactive := isInteractiveTerminal()
-	connectURL, connectErr := fetchConnect(
-		ctx,
-		session,
-		credentialClientID,
-		interactive,
-		auth.Login,
-	)
-	if connectErr != nil {
-		diagnostics.Printf("hosted connect session failed: %v\n", connectErr)
+	retriedResolved, remainingFailures := resolvers.connectAndRetry(ctx, connectable)
+	for _, err := range remainingFailures {
 		var mismatch *identityMismatchError
-		if errors.As(connectErr, &mismatch) {
-			return nil, connectErr
+		if errors.As(err, &mismatch) {
+			return nil, err
 		}
-		if !interactive && needsGatewayAccessReauthentication(connectErr) {
-			fmt.Fprintln(os.Stderr, "⚠ Non-interactive session detected. Re-run `kontext start` in an interactive terminal to authorize hosted connect.")
-		}
-		fmt.Fprintf(os.Stderr, "⚠ Could not create hosted connect session (%s)\n", connectFailureSummary(connectErr))
-		printLaunchWarnings(entryByEnvVar, failures, diagnostics)
-		return resolved, nil
 	}
-
-	providerList := joinEntryProviders(connectable)
-	prompt := printHostedConnectInstructions(os.Stderr, providerList, connectURL, interactive, browser.OpenURL)
-	if !prompt {
-		printLaunchWarnings(entryByEnvVar, failures, diagnostics)
-		return resolved, nil
-	}
-	fmt.Fprint(os.Stderr, "  Press Enter after connecting...")
-	bufio.NewReader(os.Stdin).ReadString('\n')
-
-	retriedResolved, remainingFailures := retryConnectableCredentials(
-		ctx,
-		session,
-		connectable,
-		credentialClientID,
-		diagnostics,
-	)
 	resolved = append(resolved, retriedResolved...)
 	for _, entry := range connectable {
 		if err, ok := remainingFailures[entry.EnvVar]; ok {
@@ -356,7 +330,7 @@ func resolveCredentials(
 		delete(failures, entry.EnvVar)
 	}
 
-	printLaunchWarnings(entryByEnvVar, failures, diagnostics)
+	resolvers.printLaunchWarnings(entryByEnvVar, failures)
 	return resolved, nil
 }
 
@@ -366,86 +340,7 @@ func printCredentialFailure(entry credential.Entry, err error, diagnostics diagn
 		fmt.Fprintln(os.Stderr, "needs connection")
 		return
 	}
-	fmt.Fprintf(os.Stderr, "⚠ skipped (%s)\n", credentialFailureSummary(err))
-}
-
-func printHostedConnectInstructions(out io.Writer, providerList, connectURL string, interactive bool, openURL func(string) error) bool {
-	fmt.Fprintf(out, "\nConnect missing providers: %s\n", providerList)
-	if !interactive {
-		fmt.Fprintf(out, "  Open this URL in a browser, then rerun `kontext start`:\n  %s\n", connectURL)
-		return false
-	}
-
-	fmt.Fprintf(out, "  Opening hosted connect for %s...\n", providerList)
-	if err := openURL(connectURL); err != nil {
-		fmt.Fprintf(out, "  Could not open the browser automatically. Open this URL instead:\n  %s\n", connectURL)
-	}
-	return true
-}
-
-func unresolvedConnectableEntries(entryByEnvVar map[string]credential.Entry, failures map[string]error) []credential.Entry {
-	var entries []credential.Entry
-	for envVar, err := range failures {
-		resolutionErr, ok := err.(*credentialResolutionError)
-		if !ok || resolutionErr.Reason != failureDisconnected {
-			continue
-		}
-		entry, ok := entryByEnvVar[envVar]
-		if !ok {
-			continue
-		}
-		entries = append(entries, entry)
-	}
-	slices.SortFunc(entries, func(a, b credential.Entry) int {
-		return strings.Compare(a.EnvVar, b.EnvVar)
-	})
-	return entries
-}
-
-func retryConnectableCredentials(
-	ctx context.Context,
-	session *auth.Session,
-	entries []credential.Entry,
-	credentialClientID string,
-	diagnostics diagnostic.Logger,
-) ([]credential.Resolved, map[string]error) {
-	attemptDelays := []time.Duration{0, 3 * time.Second, 7 * time.Second}
-	pending := make(map[string]credential.Entry, len(entries))
-	for _, entry := range entries {
-		pending[entry.EnvVar] = entry
-	}
-	failures := make(map[string]error, len(entries))
-	resolved := make([]credential.Resolved, 0, len(entries))
-
-	for attempt, delay := range attemptDelays {
-		if len(pending) == 0 {
-			break
-		}
-		if delay > 0 {
-			time.Sleep(delay)
-		}
-
-		for envVar, entry := range pending {
-			diagnostics.Printf(
-				"  Retrying %s (%d/%d)... ",
-				entry.EnvVar,
-				attempt+1,
-				len(attemptDelays),
-			)
-			value, err := exchangeCredential(ctx, session, entry, credentialClientID)
-			if err != nil {
-				diagnostics.Printf("credential %s retry failed: %v\n", entry.EnvVar, err)
-				failures[envVar] = err
-				continue
-			}
-			diagnostics.Printf("resolved\n")
-			resolved = append(resolved, credential.Resolved{Entry: entry, Value: value})
-			delete(failures, envVar)
-			delete(pending, envVar)
-		}
-	}
-
-	return resolved, failures
+	fmt.Fprintf(os.Stderr, "⚠ skipped (%v)\n", err)
 }
 
 func credentialFailureSummary(err error) string {
@@ -467,6 +362,20 @@ func credentialFailureSummary(err error) string {
 	return "run with --verbose for details"
 }
 
+func printHostedConnectInstructions(out io.Writer, providerList, connectURL string, interactive bool, openURL func(string) error) bool {
+	fmt.Fprintf(out, "\nConnect missing providers: %s\n", providerList)
+	if !interactive {
+		fmt.Fprintf(out, "  Open this URL in a browser, then rerun `kontext start`:\n  %s\n", connectURL)
+		return false
+	}
+
+	fmt.Fprintf(out, "  Opening hosted connect for %s...\n", providerList)
+	if err := openURL(connectURL); err != nil {
+		fmt.Fprintf(out, "  Could not open the browser automatically. Open this URL instead:\n  %s\n", connectURL)
+	}
+	return true
+}
+
 func connectFailureSummary(err error) string {
 	var mismatch *identityMismatchError
 	if errors.As(err, &mismatch) {
@@ -476,58 +385,6 @@ func connectFailureSummary(err error) string {
 		return "gateway access needs authorization"
 	}
 	return "run with --verbose for details"
-}
-
-func printLaunchWarnings(entryByEnvVar map[string]credential.Entry, failures map[string]error, diagnostics diagnostic.Logger) {
-	if len(failures) == 0 {
-		return
-	}
-
-	var skipped []string
-	var skippedEnvVars []string
-	for envVar, err := range failures {
-		entry, ok := entryByEnvVar[envVar]
-		if !ok {
-			continue
-		}
-		diagnostics.Printf("%s launch warning: %v\n", envVar, err)
-		if resolutionErr, ok := err.(*credentialResolutionError); ok {
-			switch resolutionErr.Reason {
-			case failureNotAttached:
-				fmt.Fprintf(
-					os.Stderr,
-					"⚠ %s is not attached to the Kontext CLI application. Attach %s to kontext-cli in the dashboard or edit %s.\n",
-					entry.Provider,
-					entry.Provider,
-					entry.EnvVar,
-				)
-			case failureUnknown:
-				fmt.Fprintf(os.Stderr, "⚠ %s references an unknown provider handle.\n", entry.EnvVar)
-			case failureTransient:
-				fmt.Fprintf(os.Stderr, "⚠ %s could not be resolved because of a temporary exchange error.\n", entry.EnvVar)
-			case failureInvalid:
-				fmt.Fprintf(os.Stderr, "⚠ %s contains an invalid Kontext placeholder.\n", entry.EnvVar)
-			case failureDisconnected:
-				skipped = append(skipped, entry.Provider)
-				skippedEnvVars = append(skippedEnvVars, entry.EnvVar)
-			default:
-				diagnostics.Printf("credential %s skipped: %v\n", entry.EnvVar, err)
-				fmt.Fprintf(os.Stderr, "⚠ %s was skipped (%s)\n", entry.EnvVar, credentialFailureSummary(err))
-			}
-			continue
-		}
-
-		diagnostics.Printf("credential %s skipped: %v\n", entry.EnvVar, err)
-		fmt.Fprintf(os.Stderr, "⚠ %s was skipped (%s)\n", entry.EnvVar, credentialFailureSummary(err))
-	}
-
-	if len(skipped) > 0 {
-		slices.Sort(skipped)
-		slices.Sort(skippedEnvVars)
-		fmt.Fprintf(os.Stderr, "⚠ Launching without providers that still need connection: %s\n", strings.Join(slices.Compact(skipped), ", "))
-		fmt.Fprintf(os.Stderr, "⚠ Missing env vars for this launch: %s\n", strings.Join(skippedEnvVars, ", "))
-		fmt.Fprintln(os.Stderr, "⚠ Connect providers in hosted connect, then rerun `kontext start`.")
-	}
 }
 
 func joinEntryProviders(entries []credential.Entry) string {
