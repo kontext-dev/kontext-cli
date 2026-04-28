@@ -2,7 +2,7 @@
 
 <img src="assets/banner-cli.svg" alt="Kontext CLI banner" width="100%" />
 
-<p><strong>Watch every action your AI coding agent takes. Inject credentials it never stores.</strong></p>
+<p><strong>Remove hardcoded agent credentials. See risky AI actions before they become incidents.</strong></p>
 
 <p>
   <a href="https://kontext.security">Website</a>
@@ -24,11 +24,11 @@
 
 ## What is Kontext CLI?
 
-Kontext CLI is an open-source command-line tool that wraps AI coding agents with a local safety layer and enterprise-grade credential management — without changing how developers work.
+Kontext CLI is an open-source command-line tool that gives AI coding agents local safety checks, short-lived scoped credentials, and governed tool-call traces — without changing how developers work.
 
-**Why we built it:** Agents like Claude Code now run shell commands, edit code, open pull requests, and call provider APIs from your machine. Most of the time that is exactly what you want. Sometimes it is `rm -rf`, `gcloud sql databases delete prod`, `git push --force main`, or a command that leaks a secret before you notice. Teams also still copy-paste long-lived API keys into `.env` files and hope for the best.
+**Why we built it:** Agents like Claude Code now run shell commands, edit code, open pull requests, and call provider APIs from your machine. Most of the time that is exactly what you want. Sometimes it is `rm -rf`, `gcloud sql databases delete prod`, `git push --force main`, or a command that leaks a secret before you notice, [like it happened here](https://x.com/lifeof_jer/status/2048103471019434248). Teams also still copy-paste long-lived API keys into `.env` files and hope for the best.
 
-**How it works:** `kontext guard start` runs a local daemon that captures Claude Code tool calls, redacts them, scores risk, and surfaces risky actions in a local dashboard. Guard mode observes today; later it can ask before risky commands run and block the delete-prod class outright. `kontext start --agent claude` adds team governance: short-lived RFC 8693 credentials are injected per session and expire when the agent exits.
+**How it works:** `kontext guard start` runs a local daemon that captures Claude Code tool calls, redacts them, scores risk, and shows risky actions in a local dashboard. Guard mode observes today; later it can ask before risky commands run and block the delete-prod class outright. `kontext start --agent claude` runs the hosted workflow that made Kontext useful before Guard: OAuth/OIDC login, provider connection, RFC 8693 token exchange, short-lived scoped credentials, and governed traces for the team.
 
 ## Quick Start
 
@@ -40,14 +40,14 @@ claude
 
 That is it: local-only, no login, observe mode. The dashboard opens at `http://127.0.0.1:4765`.
 
-To add credential injection, hosted traces, and team policy, run `kontext start --agent claude` from a project with Claude Code installed.
+To remove hardcoded credentials and add hosted traces/team policy, run `kontext start --agent claude` from a project with Claude Code installed.
 
 ## Operating Modes
 
 | Mode | Command | Best for | Login required |
 | --- | --- | --- | --- |
 | Guard | `kontext guard start` | Solo developers, local risk visibility, real-time notifications | No |
-| Hosted | `kontext start --agent claude` | Teams, scoped credentials, shared traces, governance | Yes |
+| Hosted | `kontext start --agent claude` | Teams, short-lived credentials, shared traces, governance | Yes |
 
 ## What You Get
 
@@ -56,7 +56,7 @@ To add credential injection, hosted traces, and team policy, run `kontext start 
 | Local Guard mode | A local daemon watches Claude Code tool calls, scores risk, and stores redacted traces in SQLite. |
 | Observe-mode notifications | Risky actions are surfaced as `would ask` or `would deny` without blocking Claude Code. |
 | Local dashboard | Review sessions, actions, reasons, risk scores, and signals at `127.0.0.1:4765`. |
-| Ephemeral credentials | Short-lived tokens are injected only for the active hosted agent session. |
+| Ephemeral credentials | Replace hardcoded provider keys with short-lived scoped tokens injected only for the active agent session. |
 | Managed env file | The CLI creates and updates `.env.kontext` with provider placeholders. |
 | Hosted connect | Missing user providers open a browser flow instead of leaking keys locally. |
 | Governed sessions | PreToolUse, PostToolUse, and UserPromptSubmit events stream to Kontext in hosted mode. |
@@ -64,14 +64,14 @@ To add credential injection, hosted traces, and team policy, run `kontext start 
 
 ## Managed Credentials
 
-Hosted mode creates `.env.kontext` locally on first run:
+Hosted mode removes hardcoded secrets from agent workflows. On first run, the CLI creates `.env.kontext` locally:
 
 ```dotenv
 GITHUB_TOKEN={{kontext:github}}
 LINEAR_API_KEY={{kontext:linear}}
 ```
 
-Keep `.env.kontext` out of source control in repos that do not already ignore it. The CLI may append more preset provider placeholders later if your org attaches them to the shared Kontext CLI application. Literal values you add stay untouched. Providers connected after the agent has already started become available on the next `kontext start`.
+`.env.kontext` stores provider placeholders, not long-lived provider keys. The CLI exchanges placeholders such as `{{kontext:github}}` for short-lived scoped credentials at runtime. Keep `.env.kontext` out of source control in repos that do not already ignore it. Literal values you add stay untouched. Providers connected after the agent has already started become available on the next `kontext start`.
 
 ## Providers and Traces
 
