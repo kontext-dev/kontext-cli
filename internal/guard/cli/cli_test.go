@@ -38,6 +38,33 @@ func TestHookEnforceModeFailsClosedForPreToolUse(t *testing.T) {
 	}
 }
 
+func TestHookMalformedInputReturnsFailSafeDecision(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"hook", "claude-code"}, strings.NewReader(`{`), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"allow"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "malformed hook input") {
+		t.Fatalf("stderr = %s", stderr.String())
+	}
+}
+
+func TestHookMalformedInputFailsClosedInEnforceMode(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"hook", "claude-code", "--mode", "enforce"}, strings.NewReader(`{`), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %s", stdout.String())
+	}
+}
+
 func TestInstalledHookCommandUsesStableLauncherOverride(t *testing.T) {
 	t.Setenv("KONTEXT_GUARD_HOOK_COMMAND", "'/usr/local/bin/kontext' guard hook claude-code")
 

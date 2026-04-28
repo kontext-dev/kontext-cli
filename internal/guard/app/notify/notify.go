@@ -25,5 +25,9 @@ func Decision(decision risk.RiskDecision) {
 		title = "Kontext would deny"
 	}
 	cmd := exec.Command("osascript", "-e", fmt.Sprintf(`display notification %q with title %q`, decision.Reason, title))
-	_ = cmd.Start()
+	if err := cmd.Start(); err == nil {
+		go func() {
+			_ = cmd.Wait()
+		}()
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
@@ -57,6 +58,7 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
 	store := &Store{db: db}
 	if err := store.migrate(context.Background()); err != nil {
 		db.Close()
@@ -107,7 +109,7 @@ func (s *Store) SaveDecision(ctx context.Context, event risk.HookEvent, decision
 	if sessionID == "" {
 		sessionID = "local"
 	}
-	id := fmt.Sprintf("evt_%d", now.UnixNano())
+	id := "evt_" + uuid.NewString()
 	riskEventJSON, err := json.Marshal(decision.RiskEvent)
 	if err != nil {
 		return DecisionRecord{}, err

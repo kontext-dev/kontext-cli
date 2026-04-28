@@ -3,10 +3,65 @@ package sqlite
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 )
+
+func TestSaveDecisionGeneratesUniqueIDsConcurrently(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const total = 50
+	ids := make(chan string, total)
+	errs := make(chan error, total)
+	var wg sync.WaitGroup
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			record, err := store.SaveDecision(context.Background(), risk.HookEvent{
+				SessionID:     "s1",
+				Agent:         "claude-code",
+				HookEventName: "PreToolUse",
+				ToolName:      "Read",
+			}, risk.RiskDecision{
+				Decision:   risk.DecisionAllow,
+				Reason:     "normal",
+				ReasonCode: "normal_tool_call",
+				RiskEvent:  risk.RiskEvent{Type: risk.EventNormalToolCall},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids <- record.ID
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(ids)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for id := range ids {
+		if !strings.HasPrefix(id, "evt_") {
+			t.Fatalf("id = %q, want evt_ prefix", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate id generated: %s", id)
+		}
+		seen[id] = true
+	}
+	if len(seen) != total {
+		t.Fatalf("saved %d records, want %d", len(seen), total)
+	}
+}
 
 func TestSessionsRejectsInvalidStoredTimestamp(t *testing.T) {
 	store, err := OpenStore(t.TempDir() + "/guard.db")

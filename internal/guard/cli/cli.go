@@ -173,8 +173,9 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	}
 	event, err := decodeClaudeHook(stdin)
 	if err != nil {
+		fmt.Fprintf(stderr, "kontext: malformed hook input: %v\n", err)
 		writeClaudeDecision(stdout, "PreToolUse", risk.DecisionDeny, "malformed hook input", hookMode)
-		return err
+		return nil
 	}
 	client := claudecode.NewClient(*baseURL)
 	result, err := client.Process(ctx, event)
