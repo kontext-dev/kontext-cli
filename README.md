@@ -2,7 +2,7 @@
 
 <img src="assets/banner-cli.svg" alt="Kontext CLI banner" width="100%" />
 
-<p><strong>Run Claude Code with hosted governance or local-only guardrails.</strong></p>
+<p><strong>Local-first control for AI coding agents.</strong></p>
 
 <p>
   <a href="https://kontext.security">Website</a>
@@ -22,41 +22,76 @@
 
 </div>
 
-## What is Kontext CLI?
+## Why Kontext exists
 
-Kontext CLI is an open-source command-line tool for running AI coding agents with better credential handling, trace visibility, and local safety checks.
+AI coding agents can now read code, run shell commands, open pull requests, call provider APIs, and touch production systems. But most teams still give them access the old way: long-lived tokens in `.env` files, copied credentials, and terminal sessions with almost no audit trail.
 
-There are two ways to run Claude Code with Kontext:
+Kontext gives those agents a control layer without changing how developers work.
 
-```bash
-kontext start --agent claude
-```
+Use it locally to see what Claude Code is doing, which actions look risky, and why they were flagged. Use hosted mode when your team also wants short-lived scoped credentials, hosted traces, and governance across developers.
 
-Hosted mode. Kontext authenticates you, injects short-lived scoped credentials, starts a governed Claude Code session, and streams tool events to the hosted Kontext dashboard.
+## What you get
 
-```bash
-kontext guard start
-```
+- **Local-first Guard mode**: run Claude Code normally while Kontext records tool calls, scores risk locally, stores redacted traces in SQLite, and opens a local dashboard.
+- **Short-lived credentials**: replace copied API keys with scoped credentials injected at session start and gone when the session ends.
+- **Readable risk decisions**: every action is classified as `would allow`, `would ask`, or `would deny` in observe mode.
+- **One CLI, two modes**: local-only guardrails for individual developers, hosted governance for teams.
 
-Local Guard mode. No login, no hosted API, no trace upload by default. Kontext runs a local daemon, installs local Claude Code hooks, scores tool calls locally, stores redacted events in SQLite, and opens a local dashboard.
+## Fastest start
 
-## Install
+Install:
 
 ```bash
 brew install kontext-security/tap/kontext
 ```
 
-Prefer a direct binary? Download the latest build from [GitHub Releases](https://github.com/kontext-security/kontext-cli/releases).
+Start local Guard mode:
 
-## Hosted Mode
+```bash
+kontext guard start
+```
 
-Use hosted mode when you want managed credentials and team-visible traces:
+Then run Claude Code as usual:
+
+```bash
+claude
+```
+
+Kontext installs the local Claude Code hooks, starts a daemon on `127.0.0.1:4765`, opens the dashboard, and stays in observe mode by default. Claude Code is not blocked.
+
+## Two ways to run Kontext
+
+### Local Guard mode
+
+```bash
+kontext guard start
+```
+
+Use this when you want local visibility and risk scoring without creating an account.
+
+- no login
+- no hosted API
+- no trace upload by default
+- local daemon
+- local SQLite database
+- local dashboard and notifications
+- observe mode by default
+
+Dashboard:
+
+```text
+http://127.0.0.1:4765
+```
+
+### Hosted mode
 
 ```bash
 kontext start --agent claude
 ```
 
-On first run, Kontext opens your browser for login and provider connection. It creates `.env.kontext` when needed, exchanges placeholders such as `{{kontext:github}}` for short-lived credentials, launches Claude Code, and expires credentials when the session ends.
+Use this when your team wants managed credentials and shared trace visibility.
+
+On first run, Kontext authenticates you, prepares a `.env.kontext` file when needed, opens hosted connect for missing providers, exchanges placeholders such as `{{kontext:github}}` for short-lived scoped tokens, launches Claude Code, and expires credentials when the session ends.
 
 Example `.env.kontext`:
 
@@ -65,84 +100,42 @@ GITHUB_TOKEN={{kontext:github}}
 LINEAR_API_KEY={{kontext:linear}}
 ```
 
-Provider setup and trace review live in [app.kontext.security](https://app.kontext.security).
-
-## Local Guard Mode
-
-Use local Guard mode when you want local-only visibility and risk scoring:
-
-```bash
-kontext guard start
-claude
-```
-
-`kontext guard start`:
-
-- verifies Claude Code is installed
-- installs or updates the local Claude Code Guard hooks
-- starts a daemon on `127.0.0.1:4765`
-- opens the local dashboard
-- records decisions as `would allow`, `would ask`, or `would deny`
-
-Guard mode defaults to observe mode, so it does not block Claude Code.
-
-Local dashboard:
-
-```text
-http://127.0.0.1:4765
-```
-
-Useful commands:
-
-```bash
-kontext guard status
-kontext guard dashboard
-kontext guard doctor
-kontext guard hooks install claude-code
-kontext guard hooks uninstall claude-code
-```
-
-## Security Model
-
-Hosted mode:
-
-- OIDC browser login
-- refresh token stored in the system keyring
-- RFC 8693 token exchange for short-lived provider credentials
-- traces stream to Kontext
-
-Local Guard mode:
-
-- no login required
-- no hosted API required
-- no trace upload by default
-- local SQLite persistence
-- local Markov-chain risk model, not an LLM
+Provider setup and hosted traces live in [app.kontext.security](https://app.kontext.security).
 
 ## Architecture
 
-Hosted mode:
-
-```text
-kontext start --agent claude
-  -> auth
-  -> hosted session
-  -> credential exchange
-  -> sidecar
-  -> Claude Code hooks
-  -> hosted Kontext traces
-```
-
 Local Guard mode:
 
 ```text
-kontext guard start
-  -> local Claude Code hooks
+Claude Code
+  -> kontext guard hook claude-code
   -> local daemon
   -> deterministic risk rules
-  -> Markov-chain score
-  -> SQLite
+  -> Markov-chain risk model
+  -> local SQLite
   -> local dashboard + notifications
+```
+
+Hosted mode:
+
+```text
+Claude Code
+  -> kontext hook
+  -> hosted session runtime
+  -> scoped credential exchange
+  -> hosted Kontext traces
+  -> team governance
+```
+
+Guard mode is a local safety layer. It uses deterministic rules for obvious risk such as credential access, direct provider API calls, and destructive operations. The Markov-chain model adds sequence context for coding-agent workflows. It is local JSON, not an LLM and not a hosted scoring service.
+
+## Useful commands
+
+```bash
+kontext guard status      # show local Guard counters
+kontext guard dashboard   # open or print the local dashboard URL
+kontext guard doctor      # check daemon and Claude Code hook state
+kontext doctor            # inspect global Kontext CLI setup
 ```
 
 ## Development
