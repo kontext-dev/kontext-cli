@@ -192,7 +192,7 @@ order by latest_at desc
 		return nil, err
 	}
 	defer rows.Close()
-	var sessions []SessionSummary
+	sessions := []SessionSummary{}
 	for rows.Next() {
 		var item SessionSummary
 		var latest string
@@ -246,7 +246,7 @@ order by created_at desc
 		return nil, err
 	}
 	defer rows.Close()
-	var records []DecisionRecord
+	records := []DecisionRecord{}
 	for rows.Next() {
 		record, err := scanDecision(rows)
 		if err != nil {

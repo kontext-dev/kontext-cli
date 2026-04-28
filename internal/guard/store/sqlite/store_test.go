@@ -2,12 +2,45 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 )
+
+func TestEmptyCollectionsEncodeAsJSONArray(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sessions, err := store.Sessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedSessions, err := json.Marshal(sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encodedSessions) != "[]" {
+		t.Fatalf("empty sessions encoded as %s, want []", encodedSessions)
+	}
+
+	events, err := store.Events(context.Background(), "missing-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedEvents, err := json.Marshal(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encodedEvents) != "[]" {
+		t.Fatalf("empty events encoded as %s, want []", encodedEvents)
+	}
+}
 
 func TestSaveDecisionGeneratesUniqueIDsConcurrently(t *testing.T) {
 	store, err := OpenStore(t.TempDir() + "/guard.db")
