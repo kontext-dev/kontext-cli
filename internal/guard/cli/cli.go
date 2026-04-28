@@ -365,7 +365,7 @@ func PrintHookStatus(out io.Writer) {
 	for _, raw := range hooks {
 		for _, command := range hookCommands(raw) {
 			switch {
-			case strings.Contains(command, "kontext guard hook claude-code") || strings.Contains(command, "kontext-guard hook claude-code"):
+			case strings.Contains(command, "kontext guard hook claude-code"):
 				guard = true
 				fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
 			case strings.Contains(command, "kontext hook"):
@@ -558,9 +558,7 @@ func mergeHooks(raw any, hookCommand string) map[string]any {
 
 func isGuardHookEntry(entry any) bool {
 	text := fmt.Sprintf("%v", entry)
-	return strings.Contains(text, "kontext guard hook claude-code") ||
-		strings.Contains(text, "kontext-guard hook claude-code") ||
-		strings.Contains(text, "kontext-guard-dev.js")
+	return strings.Contains(text, "kontext guard hook claude-code")
 }
 
 func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
