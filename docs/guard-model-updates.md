@@ -6,7 +6,7 @@ The public runtime does not train models. It loads an accepted model file, combi
 
 ## Source of new models
 
-Guard Lab owns model improvement:
+Lab owns model improvement:
 
 ```text
 new traces/datasets

@@ -58,7 +58,7 @@ Guard uses two layers:
 1. Deterministic rules for obvious risk, such as credential access, direct provider API calls with credential material, production mutations, and destructive persistent-resource operations.
 2. A local Markov-chain risk model for sequence context in coding-agent workflows.
 
-The shipped model is a JSON artifact under `models/guard/`. Guard Lab is the private pipeline that ingests datasets and local traces, evaluates candidate models, and produces improved JSON files. Accepted model files are committed back to this repo by PR.
+The shipped model is a JSON artifact under `models/guard/`. Lab is the private pipeline that ingests datasets and local traces, evaluates candidate models, and produces improved JSON files. Accepted model files are committed back to this repo by PR.
 
 ## Public/private boundary
 
@@ -70,7 +70,7 @@ Public in `kontext-cli`:
 - deterministic risk rules
 - shipped baseline/candidate model JSON files
 
-Private in Guard Lab:
+Private in Lab:
 
 - dataset ingestion
 - OpenTelemetry/Claude trace import
@@ -83,9 +83,9 @@ Private in Guard Lab:
 
 Linear is the front door for planning. GitHub issues and Linear issues should sync.
 
-- Linear project: `Kontext CLI / Guard Runtime`
-- GitHub label: `area:guard`
-- Private pipeline project: `Guard Lab / Model Pipeline`
+- Linear project: `Kontext CLI`
+- GitHub label: `area:kontext`
+- Private pipeline project: `Lab / Model Pipeline`
 
 Done means:
 
