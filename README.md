@@ -24,40 +24,35 @@
 
 ## Why Kontext exists
 
-AI coding agents can now read code, run shell commands, open pull requests, call provider APIs, and touch production systems. But most teams still give them access the old way: long-lived tokens in `.env` files, copied credentials, and terminal sessions with almost no audit trail.
+Kontext is a local security guardrail for AI coding agents.
 
-Kontext gives those agents a control layer without changing how developers work.
+Agents like Claude Code can now run shell commands, edit code, open pull requests, and call provider APIs from your machine. Most of the time that is exactly what you want. Sometimes it is `rm -rf`, `gcloud sql databases delete prod`, `git push --force main`, or a command that leaks a secret before you notice.
 
-Use it locally to see what Claude Code is doing, which actions look risky, and why they were flagged. Use hosted mode when your team also wants short-lived scoped credentials, hosted traces, and governance across developers.
+Kontext gives you a seatbelt for that workflow. You stay in flow, but risky actions are surfaced while the agent is working instead of after the damage is done.
 
 ## What you get
 
-- **Local-first Guard mode**: run Claude Code normally while Kontext records tool calls, scores risk locally, stores redacted traces in SQLite, and opens a local dashboard.
-- **Short-lived credentials**: replace copied API keys with scoped credentials injected at session start and gone when the session ends.
-- **Readable risk decisions**: every action is classified as `would allow`, `would ask`, or `would deny` in observe mode.
-- **One CLI, two modes**: local-only guardrails for individual developers, hosted governance for teams.
+- **Local by default**: `kontext guard start` runs a local daemon. No login, no hosted API, no trace upload by default.
+- **A live feed of agent actions**: Claude Code tool calls are captured, redacted, scored, and shown in a local dashboard.
+- **Risk notifications**: in observe mode, Kontext surfaces actions that look like `ask` or `deny` so you can review what your agent actually did.
+- **A path to enforcement**: today Guard observes; next it can ask before risky commands run; later it can block the delete-prod class outright.
+- **Hosted governance when you need it**: teams can use hosted mode for short-lived scoped credentials, shared traces, and policy across developers.
 
 ## Fastest start
 
-Install:
-
 ```bash
 brew install kontext-security/tap/kontext
-```
-
-Start local Guard mode:
-
-```bash
 kontext guard start
-```
-
-Then run Claude Code as usual:
-
-```bash
 claude
 ```
 
-Kontext installs the local Claude Code hooks, starts a daemon on `127.0.0.1:4765`, opens the dashboard, and stays in observe mode by default. Claude Code is not blocked.
+That starts the local daemon, installs the Claude Code hooks, opens the dashboard, and leaves Claude Code running normally. Guard mode is observe-only by default.
+
+Dashboard:
+
+```text
+http://127.0.0.1:4765
+```
 
 ## Two ways to run Kontext
 
@@ -67,21 +62,13 @@ Kontext installs the local Claude Code hooks, starts a daemon on `127.0.0.1:4765
 kontext guard start
 ```
 
-Use this when you want local visibility and risk scoring without creating an account.
-
-- no login
-- no hosted API
-- no trace upload by default
-- local daemon
-- local SQLite database
-- local dashboard and notifications
-- observe mode by default
-
-Dashboard:
+Best for individual developers who want local visibility and safety checks first.
 
 ```text
-http://127.0.0.1:4765
+local daemon -> redacted traces -> risk scoring -> local dashboard + notifications
 ```
+
+Local Guard mode does not require an account and does not upload your code or traces by default.
 
 ### Hosted mode
 
@@ -89,7 +76,7 @@ http://127.0.0.1:4765
 kontext start --agent claude
 ```
 
-Use this when your team wants managed credentials and shared trace visibility.
+Best for teams that want governed credentials and shared trace visibility.
 
 On first run, Kontext authenticates you, prepares a `.env.kontext` file when needed, opens hosted connect for missing providers, exchanges placeholders such as `{{kontext:github}}` for short-lived scoped tokens, launches Claude Code, and expires credentials when the session ends.
 
