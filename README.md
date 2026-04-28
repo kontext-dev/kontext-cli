@@ -2,7 +2,7 @@
 
 <img src="assets/banner-cli.svg" alt="Kontext CLI banner" width="100%" />
 
-<p><strong>Store Credentials. Inject At Runtime. Agents Never Store The Keys.</strong></p>
+<p><strong>Run Claude Code with hosted governance or local-only guardrails.</strong></p>
 
 <p>
   <a href="https://kontext.security">Website</a>
@@ -24,108 +24,126 @@
 
 ## What is Kontext CLI?
 
-Kontext CLI is an open-source command-line tool that wraps AI coding agents with enterprise-grade identity, credential management, and governance — without changing how developers work.
+Kontext CLI is an open-source command-line tool for running AI coding agents with better credential handling, trace visibility, and local safety checks.
 
-**Why we built it:** AI coding agents need access to GitHub, Stripe, databases, and dozens of other services. Today, teams copy-paste long-lived API keys into `.env` files and hope for the best. Kontext replaces that with short-lived, scoped credentials that are injected at session start and gone when the session ends. Every tool call is logged. Every secret is accounted for.
-
-**How it works:** On first run, kontext start authenticates you, bootstraps the shared Kontext CLI application for your org, creates a local .env.kontext file if needed, opens hosted connect for any missing preset providers, exchanges placeholders for short-lived tokens via RFC 8693 token exchange, and launches your agent with those credentials injected. When the session ends, credentials expire automatically.
-
-## Quick Start
-
-Install the CLI:
-
-```bash
-brew install kontext-security/tap/kontext
-```
-
-Run it from a project with Claude Code installed:
+There are two ways to run Claude Code with Kontext:
 
 ```bash
 kontext start --agent claude
 ```
 
-The first run opens your browser for login and provider connection. After that, `kontext start` resolves credentials, injects them into the agent process, and starts streaming governed tool events. The CLI session is stored in your system keyring and can be cleared with `kontext logout`.
+Hosted mode. Kontext authenticates you, injects short-lived scoped credentials, starts a governed Claude Code session, and streams tool events to the hosted Kontext dashboard.
+
+```bash
+kontext guard start
+```
+
+Local Guard mode. No login, no hosted API, no trace upload by default. Kontext runs a local daemon, installs local Claude Code hooks, scores tool calls locally, stores redacted events in SQLite, and opens a local dashboard.
+
+## Install
+
+```bash
+brew install kontext-security/tap/kontext
+```
 
 Prefer a direct binary? Download the latest build from [GitHub Releases](https://github.com/kontext-security/kontext-cli/releases).
 
-Need more detail while debugging startup? Run `kontext start --verbose` or set `KONTEXT_DEBUG=1` to print redacted diagnostics to stderr.
+## Hosted Mode
 
-## Managed Credentials
+Use hosted mode when you want managed credentials and team-visible traces:
 
-The CLI creates `.env.kontext` locally on first run:
+```bash
+kontext start --agent claude
+```
+
+On first run, Kontext opens your browser for login and provider connection. It creates `.env.kontext` when needed, exchanges placeholders such as `{{kontext:github}}` for short-lived credentials, launches Claude Code, and expires credentials when the session ends.
+
+Example `.env.kontext`:
 
 ```dotenv
 GITHUB_TOKEN={{kontext:github}}
 LINEAR_API_KEY={{kontext:linear}}
 ```
 
-Keep `.env.kontext` out of source control in repos that do not already ignore it. The CLI may append more preset provider placeholders later if your org attaches them to the shared Kontext CLI application. Literal values you add stay untouched. Providers connected after the agent has already started become available on the next `kontext start`.
+Provider setup and trace review live in [app.kontext.security](https://app.kontext.security).
 
-## Providers and Traces
+## Local Guard Mode
 
-Provider setup and trace review live in the hosted dashboard at [app.kontext.security](https://app.kontext.security). Use the same account you used for `kontext login`.
+Use local Guard mode when you want local-only visibility and risk scoring:
 
-**Add providers**
+```bash
+kontext guard start
+claude
+```
 
-1. Open **Providers** in the dashboard.
-2. Add a built-in provider, such as GitHub or Linear, or create a custom provider.
-3. For built-in providers, configure allowed scopes and any provider-specific OAuth settings shown in the dashboard. For custom providers, choose end-user OAuth, end-user key, or organization key.
-4. Open **Applications** → **kontext-cli** → **Providers** and attach the providers the CLI application can use.
-5. Reference the provider handles in `.env.kontext`.
+`kontext guard start`:
 
-**Check traces**
+- verifies Claude Code is installed
+- installs or updates the local Claude Code Guard hooks
+- starts a daemon on `127.0.0.1:4765`
+- opens the local dashboard
+- records decisions as `would allow`, `would ask`, or `would deny`
 
-1. Run `kontext start --agent claude`.
-2. Ask Claude Code to perform a tool-using task.
-3. Open **Traces** in the dashboard to inspect live hook events, tool calls, outcomes, user attribution, and session context.
+Guard mode defaults to observe mode, so it does not block Claude Code.
 
-## What You Get
+Local dashboard:
 
-| Capability | What it means |
-| --- | --- |
-| Ephemeral credentials | Short-lived tokens are injected only for the active agent session. |
-| Managed env file | The CLI creates and updates `.env.kontext` with provider placeholders. |
-| Hosted connect | Missing user providers open a browser flow instead of leaking keys locally. |
-| Governed sessions | PreToolUse, PostToolUse, and UserPromptSubmit events stream to Kontext. |
-| Native runtime | A small Go binary, no local daemon, no Docker, no Node or Python runtime. |
+```text
+http://127.0.0.1:4765
+```
 
-## Security
+Useful commands:
 
-- OIDC browser login with refresh tokens stored in the system keyring.
-- RFC 8693 token exchange for short-lived, provider-scoped runtime credentials.
-- AES-256-GCM encryption at rest for provider credentials stored in Kontext.
-- No long-lived provider keys are written to the project or agent config.
+```bash
+kontext guard status
+kontext guard dashboard
+kontext guard doctor
+kontext guard hooks install claude-code
+kontext guard hooks uninstall claude-code
+```
 
-## Supported Agents
+## Security Model
 
-| Agent | Flag | Status |
-| --- | --- | --- |
-| Claude Code | `--agent claude` | Active |
+Hosted mode:
 
-Cursor and Codex support are planned, but they are not shipped in this repo yet.
+- OIDC browser login
+- refresh token stored in the system keyring
+- RFC 8693 token exchange for short-lived provider credentials
+- traces stream to Kontext
+
+Local Guard mode:
+
+- no login required
+- no hosted API required
+- no trace upload by default
+- local SQLite persistence
+- local Markov-chain risk model, not an LLM
 
 ## Architecture
 
+Hosted mode:
+
 ```text
 kontext start --agent claude
-  │
-  ├─ Auth: OIDC refresh token from system keyring
-  ├─ ConnectRPC: CreateSession → governed session in dashboard
-  ├─ BootstrapCli: sync managed provider entries into .env.kontext
-  ├─ Token exchange: {{kontext:provider}} → short-lived credential
-  ├─ Sidecar: Unix socket server + heartbeat loop
-  ├─ Hooks: generated Claude Code settings.json
-  │    │
-  │    ├─ PreToolUse        → kontext hook → sidecar → ProcessHookEvent
-  │    ├─ PostToolUse       → kontext hook → sidecar → ProcessHookEvent
-  │    └─ UserPromptSubmit  → kontext hook → sidecar → ProcessHookEvent
-  │
-  └─ Exit: EndSession → credential expiry + temp file cleanup
+  -> auth
+  -> hosted session
+  -> credential exchange
+  -> sidecar
+  -> Claude Code hooks
+  -> hosted Kontext traces
 ```
 
-The CLI communicates with the Kontext backend through ConnectRPC. Hook handlers talk to the sidecar over a Unix socket using length-prefixed JSON, keeping agent-specific hook parsing local to the CLI.
+Local Guard mode:
 
-Kontext captures what the agent tried to do and what happened. It does not capture LLM reasoning, token usage, or conversation history.
+```text
+kontext guard start
+  -> local Claude Code hooks
+  -> local daemon
+  -> deterministic risk rules
+  -> Markov-chain score
+  -> SQLite
+  -> local dashboard + notifications
+```
 
 ## Development
 
@@ -134,10 +152,16 @@ go build -o bin/kontext ./cmd/kontext
 go test ./...
 go test -race ./...
 go vet ./...
-gofmt -w ./cmd ./internal
+pnpm install --frozen-lockfile
+pnpm build
+make guard-e2e
 ```
 
-Generate protobuf code with `buf generate`.
+Generate protobuf code with:
+
+```bash
+buf generate
+```
 
 Service definitions live in [kontext-security/proto `agent.proto`](https://github.com/kontext-security/proto/blob/main/proto/kontext/agent/v1/agent.proto).
 
