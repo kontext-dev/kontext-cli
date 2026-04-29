@@ -1,6 +1,16 @@
 bin/
 dist/
+!internal/guard/web/assets/dist/
+!internal/guard/web/assets/dist/**
 *.exe
 .env.kontext
 /kontext
 .DS_Store
+node_modules/
+web/guard-dashboard/dist/
+web/guard-dashboard/node_modules/
+data/
+*.db
+*.sqlite
+*.sqlite3
+models/generated/

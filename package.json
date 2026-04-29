@@ -1,0 +1,11 @@
+{
+  "name": "kontext-cli-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "./scripts/build-guard-dashboard-assets.sh",
+    "test": "go test ./... && go vet ./...",
+    "dev": "pnpm --dir web/guard-dashboard dev"
+  }
+}

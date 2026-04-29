@@ -40,6 +40,16 @@ func TestStartCmdHasVerboseFlag(t *testing.T) {
 	}
 }
 
+func TestGuardCmdRoutesToLocalGuardMode(t *testing.T) {
+	cmd := guardCmd()
+	if cmd.Use != "guard" {
+		t.Fatalf("Use = %q, want guard", cmd.Use)
+	}
+	if !cmd.DisableFlagParsing {
+		t.Fatal("guard command should pass flags through to the local Guard command parser")
+	}
+}
+
 func TestLogoutCmdAlreadyLoggedOut(t *testing.T) {
 	cmd := newLogoutCmd(func() error { return keyring.ErrNotFound })
 

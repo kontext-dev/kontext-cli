@@ -1,0 +1,780 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/cli/browser"
+
+	"github.com/kontext-security/kontext-cli/internal/guard/app/hooks/claudecode"
+	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
+	"github.com/kontext-security/kontext-cli/internal/guard/markov"
+	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
+	"github.com/kontext-security/kontext-cli/internal/guard/trace"
+)
+
+const (
+	defaultBaseURL   = "http://" + server.DefaultAddr
+	defaultModelPath = "models/guard/coding-agent-v0.json"
+)
+
+type hookMode string
+
+const (
+	hookModeObserve hookMode = "observe"
+	hookModeEnforce hookMode = "enforce"
+)
+
+// Run executes the Kontext command line.
+func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		usage(stdout)
+		return nil
+	}
+	switch args[0] {
+	case "start", "daemon":
+		return runDaemon(args[1:], stdout)
+	case "stop":
+		fmt.Fprintln(stdout, "Stop the foreground `kontext guard start` process with Ctrl-C.")
+		return nil
+	case "status":
+		return runStatus(ctx, args[1:], stdout)
+	case "dashboard":
+		return runDashboard(args[1:], stdout)
+	case "doctor":
+		return runDoctor(ctx, args[1:], stdout)
+	case "hooks":
+		return runHooks(args[1:], stdout)
+	case "hook":
+		return runHookCommand(ctx, args[1:], stdin, stdout, stderr)
+	case "traces":
+		return runTraces(ctx, args[1:], stdout)
+	case "model":
+		return runModel(args[1:], stdout)
+	case "smoke-test":
+		return runSmokeTest(ctx, args[1:], stdout)
+	case "help", "-h", "--help":
+		usage(stdout)
+		return nil
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func usage(out io.Writer) {
+	fmt.Fprintln(out, "Kontext Guard")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "commands:")
+	fmt.Fprintln(out, "  start                         Run the local daemon on 127.0.0.1:4765")
+	fmt.Fprintln(out, "  stop                          Print stop instructions")
+	fmt.Fprintln(out, "  status                        Print local dashboard counters")
+	fmt.Fprintln(out, "  dashboard                     Print dashboard URL")
+	fmt.Fprintln(out, "  doctor                        Check local daemon health")
+	fmt.Fprintln(out, "  hooks install claude-code     Install Claude Code hooks")
+	fmt.Fprintln(out, "  hooks uninstall claude-code   Remove Claude Code hooks")
+	fmt.Fprintln(out, "  hook claude-code              Runtime hook adapter")
+	fmt.Fprintln(out, "  traces inspect                Inspect local trace summary")
+	fmt.Fprintln(out, "  model info                    Print baseline model info")
+	fmt.Fprintln(out, "  model train                   Train a local fixture model")
+}
+
+func runDaemon(args []string, out io.Writer) error {
+	defaultThreshold, err := envFloat("KONTEXT_THRESHOLD", 0.5)
+	if err != nil {
+		return err
+	}
+	defaultHorizon, err := envInt("KONTEXT_HORIZON", 5)
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	addr := fs.String("addr", envString("KONTEXT_ADDR", server.DefaultAddr), "listen address")
+	dbPath := fs.String("db", envString("KONTEXT_DB", defaultDBPath()), "SQLite database path")
+	modelPath := fs.String("model", envString("KONTEXT_MODEL", defaultModelPath), "optional Markov-chain model path")
+	threshold := fs.Float64("threshold", defaultThreshold, "Markov-chain risk threshold")
+	horizon := fs.Int("horizon", defaultHorizon, "Markov-chain risk horizon")
+	skipHookInstall := fs.Bool("skip-hook-install", false, "skip Claude Code hook install")
+	noOpen := fs.Bool("no-open", false, "do not open the local dashboard")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*skipHookInstall {
+		if err := verifyClaudeCode(); err != nil {
+			return err
+		}
+		if err := installClaudeHooks(out); err != nil {
+			return err
+		}
+	}
+	var scorer risk.Scorer = risk.NoopScorer{}
+	if *modelPath != "" {
+		loaded, err := risk.LoadMarkovScorer(*modelPath, *threshold, *horizon)
+		if err != nil {
+			return err
+		}
+		scorer = loaded
+	}
+	localServer, closeStore, err := server.OpenDefaultServer(*dbPath, scorer)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = closeStore()
+	}()
+	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
+	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
+	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
+	fmt.Fprintf(out, "Risk model: %s\n", *modelPath)
+	if !*noOpen {
+		_ = browser.OpenURL("http://" + *addr)
+	}
+	return localServer.ListenAndServe(*addr)
+}
+
+func verifyClaudeCode() error {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return fmt.Errorf("Claude Code was not found on PATH; install Claude Code or run with --skip-hook-install")
+	}
+	return nil
+}
+
+func runHookCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "claude-code" {
+		return fmt.Errorf("usage: kontext guard hook claude-code")
+	}
+	return runHook(ctx, args[1:], stdin, stdout, stderr)
+}
+
+func runHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("hook claude-code", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
+	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookModeObserve)), "hook mode: observe or enforce")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	hookMode, err := parseHookMode(*mode)
+	if err != nil {
+		return err
+	}
+	event, err := decodeClaudeHook(stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "kontext: malformed hook input: %v\n", err)
+		writeClaudeDecision(stdout, "PreToolUse", risk.DecisionDeny, "malformed hook input", hookMode)
+		return nil
+	}
+	client := claudecode.NewClient(*baseURL)
+	result, err := client.Process(ctx, event)
+	if err != nil {
+		if event.HookEventName == "PreToolUse" && hookMode == hookModeEnforce {
+			writeClaudeDecision(stdout, event.HookEventName, risk.DecisionDeny, "Kontext daemon unavailable", hookMode)
+			return nil
+		}
+		fmt.Fprintf(stderr, "kontext: async hook ingestion failed: %v\n", err)
+		writeClaudeDecision(stdout, event.HookEventName, risk.DecisionAllow, "telemetry allowed", hookMode)
+		return nil
+	}
+	decision := result.Decision
+	if decision != risk.DecisionAllow && decision != risk.DecisionAsk && decision != risk.DecisionDeny {
+		decision = risk.DecisionDeny
+	}
+	if event.HookEventName != "PreToolUse" {
+		decision = risk.DecisionAllow
+	}
+	writeClaudeDecision(stdout, event.HookEventName, decision, result.Reason, hookMode)
+	return nil
+}
+
+func parseHookMode(value string) (hookMode, error) {
+	switch hookMode(strings.ToLower(strings.TrimSpace(value))) {
+	case "", hookModeObserve:
+		return hookModeObserve, nil
+	case hookModeEnforce:
+		return hookModeEnforce, nil
+	default:
+		return "", fmt.Errorf("unknown hook mode %q; use observe or enforce", value)
+	}
+}
+
+func decodeClaudeHook(r io.Reader) (risk.HookEvent, error) {
+	var raw map[string]any
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+		return risk.HookEvent{}, err
+	}
+	event := risk.HookEvent{
+		SessionID:     stringValue(raw, "session_id", "sessionId"),
+		Agent:         "claude-code",
+		HookEventName: stringValue(raw, "hook_event_name", "hookEventName"),
+		ToolName:      stringValue(raw, "tool_name", "toolName"),
+		ToolUseID:     stringValue(raw, "tool_use_id", "toolUseID", "toolUseId"),
+		CWD:           stringValue(raw, "cwd"),
+		Timestamp:     time.Now().UTC(),
+	}
+	if event.HookEventName == "" {
+		event.HookEventName = stringValue(raw, "hook_event")
+	}
+	if input, ok := raw["tool_input"].(map[string]any); ok {
+		event.ToolInput = input
+	} else if input, ok := raw["toolInput"].(map[string]any); ok {
+		event.ToolInput = input
+	}
+	if response, ok := raw["tool_response"].(map[string]any); ok {
+		event.ToolResponse = response
+	} else if response, ok := raw["toolResponse"].(map[string]any); ok {
+		event.ToolResponse = response
+	}
+	if event.HookEventName == "" {
+		return risk.HookEvent{}, errors.New("hook event name missing")
+	}
+	if event.SessionID == "" {
+		event.SessionID = "local"
+	}
+	return event, nil
+}
+
+func writeClaudeDecision(out io.Writer, hookEventName string, decision risk.Decision, reason string, mode hookMode) {
+	permissionDecision := "allow"
+	if mode == hookModeEnforce && (decision == risk.DecisionAsk || decision == risk.DecisionDeny) {
+		permissionDecision = "deny"
+	}
+	payload := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            hookEventName,
+			"permissionDecision":       permissionDecision,
+			"permissionDecisionReason": formatHookReason(decision, reason, mode),
+		},
+	}
+	_ = json.NewEncoder(out).Encode(payload)
+}
+
+func formatHookReason(decision risk.Decision, reason string, mode hookMode) string {
+	if reason == "" {
+		reason = "no reason provided"
+	}
+	if mode == hookModeObserve {
+		return fmt.Sprintf("Kontext observe mode: would %s; %s", decision, reason)
+	}
+	return reason
+}
+
+func runStatus(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	summary, err := fetchSummary(ctx, *baseURL)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Kontext Guard active")
+	fmt.Fprintf(out, "%d critical\n", summary.Critical)
+	fmt.Fprintf(out, "%d warnings\n", summary.Warnings)
+	fmt.Fprintf(out, "%d actions\n", summary.Actions)
+	fmt.Fprintf(out, "Dashboard: %s\n", *baseURL)
+	return nil
+}
+
+func runDashboard(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
+	noOpen := fs.Bool("no-open", false, "print URL without opening a browser")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s\n", *baseURL)
+	if !*noOpen {
+		_ = browser.OpenURL(*baseURL)
+	}
+	return nil
+}
+
+func fetchSummary(ctx context.Context, baseURL string) (sqlite.Summary, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/summary", nil)
+	if err != nil {
+		return sqlite.Summary{}, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return sqlite.Summary{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return sqlite.Summary{}, fmt.Errorf("daemon returned %s", resp.Status)
+	}
+	var summary sqlite.Summary
+	if err := json.NewDecoder(resp.Body).Decode(&summary); err != nil {
+		return sqlite.Summary{}, err
+	}
+	return summary, nil
+}
+
+func runDoctor(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	PrintHookStatus(out)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, *baseURL+"/healthz", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("local daemon is not reachable at %s: %w", *baseURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("local daemon health returned %s", resp.Status)
+	}
+	fmt.Fprintf(out, "Kontext Guard daemon healthy at %s\n", *baseURL)
+	return nil
+}
+
+func PrintHookStatus(out io.Writer) {
+	settingsPath, settings, err := readClaudeSettings()
+	if err != nil {
+		fmt.Fprintf(out, "Claude Code hooks: unavailable (%v)\n", err)
+		return
+	}
+	fmt.Fprintf(out, "Claude Code settings: %s\n", settingsPath)
+	hooks, ok := settings["hooks"].(map[string]any)
+	if !ok || len(hooks) == 0 {
+		fmt.Fprintln(out, "Claude Code hooks: none installed")
+		return
+	}
+	hosted := false
+	guard := false
+	for _, raw := range hooks {
+		for _, command := range hookCommands(raw) {
+			switch {
+			case strings.Contains(command, "kontext guard hook claude-code"):
+				guard = true
+				fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
+			case strings.Contains(command, "kontext hook"):
+				hosted = true
+				fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+			}
+		}
+	}
+	if guard && hosted {
+		fmt.Fprintln(out, "Claude Code hook mode: conflict (hosted and Guard hooks are both installed)")
+		return
+	}
+	if guard {
+		fmt.Fprintln(out, "Claude Code hook mode: local Guard")
+		return
+	}
+	if hosted {
+		fmt.Fprintln(out, "Claude Code hook mode: hosted")
+		return
+	}
+	fmt.Fprintln(out, "Claude Code hook mode: no Kontext hook detected")
+}
+
+func hookCommands(raw any) []string {
+	groups, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var commands []string
+	for _, group := range groups {
+		groupMap, ok := group.(map[string]any)
+		if !ok {
+			continue
+		}
+		hooks, ok := groupMap["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, hook := range hooks {
+			hookMap, ok := hook.(map[string]any)
+			if !ok {
+				continue
+			}
+			if command, ok := hookMap["command"].(string); ok {
+				commands = append(commands, command)
+			}
+		}
+	}
+	return commands
+}
+
+func runHooks(args []string, out io.Writer) error {
+	if len(args) != 2 || args[1] != "claude-code" {
+		return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
+	}
+	switch args[0] {
+	case "install":
+		return installClaudeHooks(out)
+	case "uninstall":
+		return uninstallClaudeHooks(out)
+	default:
+		return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
+	}
+}
+
+func installClaudeHooks(out io.Writer) error {
+	settingsPath, settings, err := readClaudeSettings()
+	if err != nil {
+		return err
+	}
+	if err := backupFile(settingsPath, "kontext-guard"); err != nil {
+		return err
+	}
+	hookCommand := installedHookCommand()
+	settings["hooks"] = mergeHooks(settings["hooks"], hookCommand)
+	if err := writeJSONFile(settingsPath, settings); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Installed Kontext Guard Claude Code hooks into %s\n", settingsPath)
+	fmt.Fprintf(out, "Hook command: %s\n", hookCommand)
+	fmt.Fprintln(out, "Default mode is observe. Set KONTEXT_MODE=enforce later to block ask/deny decisions.")
+	return nil
+}
+
+func uninstallClaudeHooks(out io.Writer) error {
+	settingsPath, settings, err := readClaudeSettings()
+	if err != nil {
+		return err
+	}
+	if err := backupFile(settingsPath, "kontext-guard"); err != nil {
+		return err
+	}
+	hooks, ok := settings["hooks"].(map[string]any)
+	if !ok {
+		fmt.Fprintf(out, "No Claude Code hooks found in %s\n", settingsPath)
+		return nil
+	}
+	for hookName, raw := range hooks {
+		list, ok := raw.([]any)
+		if !ok {
+			continue
+		}
+		filtered := make([]any, 0, len(list))
+		for _, entry := range list {
+			if !isGuardHookEntry(entry) {
+				filtered = append(filtered, entry)
+			}
+		}
+		hooks[hookName] = filtered
+	}
+	if err := writeJSONFile(settingsPath, settings); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Removed Kontext Guard Claude Code hooks from %s\n", settingsPath)
+	return nil
+}
+
+func readClaudeSettings() (string, map[string]any, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil, err
+	}
+	claudeDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return "", nil, err
+	}
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	settings := map[string]any{}
+	raw, err := os.ReadFile(settingsPath)
+	if err == nil {
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return "", nil, fmt.Errorf("parse Claude settings: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", nil, err
+	}
+	return settingsPath, settings, nil
+}
+
+func backupFile(path, label string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	backupPath := fmt.Sprintf("%s.%s-backup-%s", path, label, time.Now().UTC().Format("20060102T150405Z"))
+	input, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(backupPath, input, 0o644)
+}
+
+func writeJSONFile(path string, value any) error {
+	bytes, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	bytes = append(bytes, '\n')
+	return os.WriteFile(path, bytes, 0o644)
+}
+
+func mergeHooks(raw any, hookCommand string) map[string]any {
+	hooks, ok := raw.(map[string]any)
+	if !ok {
+		hooks = map[string]any{}
+	}
+	for _, hookName := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit"} {
+		var list []any
+		if existing, ok := hooks[hookName].([]any); ok {
+			for _, entry := range existing {
+				if !isGuardHookEntry(entry) {
+					list = append(list, entry)
+				}
+			}
+		}
+		list = append(list, map[string]any{
+			"matcher": "*",
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": hookCommand,
+				},
+			},
+		})
+		hooks[hookName] = list
+	}
+	return hooks
+}
+
+func isGuardHookEntry(entry any) bool {
+	text := fmt.Sprintf("%v", entry)
+	return strings.Contains(text, "kontext guard hook claude-code")
+}
+
+func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("smoke-test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "kontext-guard-smoke-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	store, err := sqlite.OpenStore(filepath.Join(dir, "guard.db"))
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	localServer := server.NewServer(store, risk.NoopScorer{})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	httpServer := &http.Server{Handler: localServer.Handler()}
+	go func() {
+		_ = httpServer.Serve(listener)
+	}()
+	defer func() {
+		_ = httpServer.Shutdown(ctx)
+	}()
+	client := claudecode.NewClient("http://" + listener.Addr().String())
+	cases := []struct {
+		name string
+		ev   risk.HookEvent
+		want risk.Decision
+	}{
+		{"safe read", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"file_path": "README.md"}}, risk.DecisionAllow},
+		{"env read", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, risk.DecisionAsk},
+		{"cat env", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, risk.DecisionAsk},
+		{"provider token", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, risk.DecisionDeny},
+		{"drop database", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, risk.DecisionDeny},
+	}
+	for _, item := range cases {
+		result, err := client.Process(ctx, item.ev)
+		if err != nil {
+			return fmt.Errorf("%s: %w", item.name, err)
+		}
+		if result.Decision != item.want {
+			return fmt.Errorf("%s: decision=%s want=%s", item.name, result.Decision, item.want)
+		}
+		fmt.Fprintf(out, "ok %-16s -> %s\n", item.name, result.Decision)
+	}
+	summary, err := store.Summary(ctx)
+	if err != nil {
+		return err
+	}
+	if summary.Actions != 5 || summary.Warnings != 2 || summary.Critical != 2 {
+		return fmt.Errorf("summary=%+v, want actions=5 warnings=2 critical=2", summary)
+	}
+	fmt.Fprintf(out, "summary critical=%d warnings=%d actions=%d\n", summary.Critical, summary.Warnings, summary.Actions)
+	return nil
+}
+
+func runTraces(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kontext guard traces inspect")
+	}
+	switch args[0] {
+	case "inspect":
+		return runStatus(ctx, args[1:], out)
+	default:
+		return fmt.Errorf("usage: kontext guard traces inspect")
+	}
+}
+
+func runModel(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kontext guard model info|train")
+	}
+	switch args[0] {
+	case "info":
+		info, err := modelInfo(defaultModelPath)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, info)
+		return nil
+	case "train":
+		return runTrainFixtureModel(args[1:], out)
+	default:
+		return fmt.Errorf("usage: kontext guard model info|train")
+	}
+}
+
+func modelInfo(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	model, err := markov.ReadModelJSON(file)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s: %d states", path, len(model.States)), nil
+}
+
+func runTrainFixtureModel(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("model train", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	inputPath := fs.String("input", "internal/trace/testdata/coding_sessions.jsonl", "fixture JSONL path")
+	outputPath := fs.String("out", "models/generated/local-model.json", "model output path")
+	alpha := fs.Float64("alpha", 1, "Markov smoothing alpha")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	file, err := os.Open(*inputPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	events, err := trace.ReadJSONL(file)
+	if err != nil {
+		return err
+	}
+	sessions := trace.GroupSessions(events)
+	model, err := markov.BuildModel(trace.Observations(sessions), trace.CodingAbstraction{}, markov.BuildOptions{Alpha: *alpha})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(*outputPath), 0o755); err != nil {
+		return err
+	}
+	outFile, err := os.Create(*outputPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	if err := markov.WriteModelJSON(outFile, model); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "wrote %s from %d events, %d sessions, %d states\n", *outputPath, len(events), len(sessions), len(model.States))
+	return nil
+}
+
+func stringValue(raw map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := raw[key].(string); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func envString(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) (int, error) {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+		}
+		return parsed, nil
+	}
+	return fallback, nil
+}
+
+func envFloat(key string, fallback float64) (float64, error) {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be a number: %w", key, err)
+		}
+		return parsed, nil
+	}
+	return fallback, nil
+}
+
+func defaultDBPath() string {
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "kontext", "guard.db")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".kontext", "guard.db")
+	}
+	return "kontext-guard.db"
+}
+
+func selfPath() string {
+	if path, err := os.Executable(); err == nil {
+		return path
+	}
+	return "kontext"
+}
+
+func installedHookCommand() string {
+	if command := os.Getenv("KONTEXT_GUARD_HOOK_COMMAND"); strings.TrimSpace(command) != "" {
+		return command
+	}
+	path := selfPath()
+	if strings.Contains(path, "go-build") {
+		if cwd, err := os.Getwd(); err == nil {
+			if _, statErr := os.Stat(filepath.Join(cwd, "cmd", "kontext")); statErr == nil {
+				return fmt.Sprintf("cd %s && go run ./cmd/kontext guard hook claude-code", shellQuote(cwd))
+			}
+		}
+	}
+	return fmt.Sprintf("%s guard hook claude-code", shellQuote(path))
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}

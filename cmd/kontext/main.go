@@ -14,6 +14,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/auth"
+	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/run"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
@@ -35,10 +36,34 @@ func main() {
 	root.AddCommand(loginCmd())
 	root.AddCommand(logoutCmd())
 	root.AddCommand(hookCmd())
+	root.AddCommand(doctorCmd())
+	root.AddCommand(guardCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func doctorCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "doctor",
+		Short: "Inspect local Kontext CLI setup",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			guardcli.PrintHookStatus(cmd.OutOrStdout())
+			return nil
+		},
+	}
+}
+
+func guardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:                "guard",
+		Short:              "Run local-only Kontext Guard mode",
+		DisableFlagParsing: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return guardcli.Run(context.Background(), args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+		},
 	}
 }
 
