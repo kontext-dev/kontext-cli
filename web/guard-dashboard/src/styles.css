@@ -326,6 +326,23 @@ dl {
   gap: 7px;
 }
 
+.reviewActions div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reviewActions button {
+  border-radius: 999px;
+  background: #171b18;
+  color: #fff;
+  padding: 9px 12px;
+}
+
+.reviewActions button.reject {
+  background: #d94f43;
+}
+
 .empty {
   padding: 18px;
   border: 1px dashed rgba(23, 27, 24, 0.16);

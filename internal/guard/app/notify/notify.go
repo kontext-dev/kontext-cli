@@ -20,9 +20,9 @@ func Decision(decision risk.RiskDecision) {
 	title := "Kontext would allow"
 	switch decision.Decision {
 	case risk.DecisionAsk:
-		title = "Kontext would ask"
+		title = "Kontext needs approval"
 	case risk.DecisionDeny:
-		title = "Kontext would deny"
+		title = "Kontext blocked an action"
 	}
 	cmd := exec.Command("osascript", "-e", fmt.Sprintf(`display notification %q with title %q`, decision.Reason, title))
 	if err := cmd.Start(); err == nil {

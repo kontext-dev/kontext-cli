@@ -257,6 +257,17 @@ order by created_at desc
 	return records, rows.Err()
 }
 
+func (s *Store) Decision(ctx context.Context, id string) (DecisionRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+select id, session_id, coalesce(tool_use_id, ''), hook_event_name, coalesce(tool_name, ''),
+  decision, reason_code, reason, risk_score, threshold, coalesce(model_version, ''),
+  risk_event_json, created_at
+from risk_decisions
+where id = ?
+`, id)
+	return scanDecision(row)
+}
+
 func scanDecision(scanner interface{ Scan(...any) error }) (DecisionRecord, error) {
 	var record DecisionRecord
 	var score sql.NullFloat64

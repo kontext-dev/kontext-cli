@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
@@ -20,7 +21,7 @@ type Client struct {
 func NewClient(baseURL string) Client {
 	return Client{
 		BaseURL: baseURL,
-		HTTP:    &http.Client{Timeout: 5 * time.Second},
+		HTTP:    &http.Client{Timeout: 5 * time.Minute},
 	}
 }
 
@@ -52,4 +53,31 @@ func (c Client) Process(ctx context.Context, event risk.HookEvent) (server.Proce
 		return server.ProcessResponse{}, err
 	}
 	return result, nil
+}
+
+func (c Client) WaitApproval(ctx context.Context, eventID string) (risk.Decision, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/demo/approvals/"+url.PathEscape(eventID)+"/wait", nil)
+	if err != nil {
+		return risk.DecisionDeny, err
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return risk.DecisionDeny, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var payload map[string]string
+		_ = json.NewDecoder(resp.Body).Decode(&payload)
+		if payload["error"] != "" {
+			return risk.DecisionDeny, fmt.Errorf("approval wait failed: %s", payload["error"])
+		}
+		return risk.DecisionDeny, fmt.Errorf("approval wait returned %s", resp.Status)
+	}
+	var result struct {
+		Decision risk.Decision `json:"decision"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return risk.DecisionDeny, err
+	}
+	return result.Decision, nil
 }

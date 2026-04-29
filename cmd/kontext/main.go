@@ -62,7 +62,12 @@ func guardCmd() *cobra.Command {
 		Short:              "Run local-only Kontext Guard mode",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return guardcli.Run(context.Background(), args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			err := guardcli.Run(context.Background(), args, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			var exitErr guardcli.ExitError
+			if errors.As(err, &exitErr) {
+				os.Exit(exitErr.Code)
+			}
+			return err
 		},
 	}
 }

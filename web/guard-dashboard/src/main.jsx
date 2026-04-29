@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-const API = import.meta.env.VITE_KONTEXT_API ?? "http://127.0.0.1:4765";
+const API = import.meta.env.VITE_KONTEXT_API ?? window.location.origin;
 
 function App() {
   const [sessions, setSessions] = useState([]);
@@ -63,6 +63,22 @@ function App() {
     setSelectedEventID(firstEventForBucket(events, nextBucket)?.id ?? "");
   }
 
+  function approveEvent(eventID, scope) {
+    fetch(`${API}/api/demo/approvals`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_id: eventID, scope }),
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error("approval failed")))
+      .then(() => {
+        setError(scope === "reject"
+          ? "Rejected. Ask Claude Code to choose a safer action."
+          : "Approved. Claude Code will continue the paused tool call.");
+        if (selectedSessionRef.current) loadEvents(selectedSessionRef.current);
+      })
+      .catch((err) => setError(err.message));
+  }
+
   const selectedSession = useMemo(
     () => sessions.find((session) => session.session_id === selectedSessionID),
     [sessions, selectedSessionID],
@@ -79,7 +95,7 @@ function App() {
       <nav className="topbar">
         <div>
           <strong>Kontext Guard</strong>
-          <span>Observe mode · local only</span>
+          <span>Local runtime gate · no cloud</span>
         </div>
         <div className="topActions">
           <SessionPicker
@@ -99,7 +115,7 @@ function App() {
           <p>Current Claude Code session</p>
           <h1>{selectedSession ? shortSession(selectedSession.session_id) : "No session yet"}</h1>
         </div>
-        <span>{selectedSession ? `${selectedSession.actions} actions` : "Start Claude Code to capture tool calls"}</span>
+        <span>{selectedSession ? `${selectedSession.actions} actions captured` : "Start Claude Code to capture tool calls"}</span>
       </section>
 
       <DecisionFunnel active={bucket} counts={counts} onSelect={selectBucket} />
@@ -113,7 +129,7 @@ function App() {
           selectedEventID={selectedEvent?.id}
           onSelect={setSelectedEventID}
         />
-        <EventInspector event={selectedEvent} />
+        <EventInspector event={selectedEvent} onApprove={approveEvent} />
       </section>
     </main>
   );
@@ -135,8 +151,8 @@ function SessionPicker({ sessions, value, onChange }) {
 function DecisionFunnel({ active, counts, onSelect }) {
   const items = [
     { id: "all", label: "All actions", value: counts.all, detail: "Everything Claude Code tried" },
-    { id: "ask", label: "Needs ask", value: counts.ask, detail: "Review before enforcement" },
-    { id: "deny", label: "Would deny", value: counts.deny, detail: "Future block queue" },
+    { id: "ask", label: "Needs approval", value: counts.ask, detail: "Policy wants a human check" },
+    { id: "deny", label: "Blocked", value: counts.deny, detail: "Too dangerous to run" },
   ];
 
   return (
@@ -184,7 +200,7 @@ function ActionList({ bucket, events, selectedEventID, onSelect }) {
   );
 }
 
-function EventInspector({ event }) {
+function EventInspector({ event, onApprove }) {
   if (!event) {
     return (
       <aside className="inspector emptyInspector">
@@ -208,7 +224,7 @@ function EventInspector({ event }) {
       <p className="reason">{humanReason(event)}</p>
 
       <section>
-        <h3>Why this is suspicious</h3>
+        <h3>{event.decision === "deny" ? "Why this was blocked" : "Why this needs attention"}</h3>
         <p>{technicalExplanation(event)}</p>
       </section>
 
@@ -221,8 +237,26 @@ function EventInspector({ event }) {
         <div><dt>Decision source</dt><dd>{decisionSource(event)}</dd></div>
         <div><dt>Reason code</dt><dd>{event.reason_code || "none"}</dd></div>
         <div><dt>Operation</dt><dd>{riskEvent.operation || riskEvent.operation_class || "unknown"}</dd></div>
-        <div><dt>Environment</dt><dd>{riskEvent.environment || "unknown"}</dd></div>
+        <div><dt>Policy result</dt><dd>{riskEvent.intent_alignment || "not evaluated"}</dd></div>
       </dl>
+
+      {riskEvent.session_intent && (
+        <section>
+          <h3>Original user request</h3>
+          <p>{riskEvent.session_intent}</p>
+        </section>
+      )}
+
+      {event.decision === "ask" && (
+        <section className="reviewActions">
+          <h3>Review action</h3>
+          <div>
+            <button onClick={() => onApprove(event.id, "once")}>Allow once</button>
+            <button onClick={() => onApprove(event.id, "session")}>Allow for session</button>
+            <button className="reject" onClick={() => onApprove(event.id, "reject")}>Reject</button>
+          </div>
+        </section>
+      )}
 
       <section>
         <h3>Signals</h3>
@@ -254,26 +288,38 @@ function firstEventForBucket(events, bucket) {
 }
 
 function bucketTitle(bucket) {
-  if (bucket === "ask") return "Needs ask";
-  if (bucket === "deny") return "Would deny";
+  if (bucket === "ask") return "Needs approval";
+  if (bucket === "deny") return "Blocked";
   return "All actions";
 }
 
 function decisionLabel(decision) {
-  if (decision === "allow") return "would allow";
-  if (decision === "ask") return "would ask";
-  if (decision === "deny") return "would deny";
+  if (decision === "allow") return "allowed";
+  if (decision === "ask") return "needs approval";
+  if (decision === "deny") return "blocked";
   return decision || "unknown";
 }
 
 function humanReason(event) {
   if (event.reason_code === "async_telemetry") return "Recorded after execution";
+  if (event.reason_code === "demo_source_control_write_approval") return "Source-control write needs approval";
+  if (event.reason_code === "demo_block_destructive_action") return "Destructive action blocked";
+  if (event.reason_code === "user_approved_action") return "Approved by user";
   if (event.reason_code === "model_risk_threshold") return "Markov sequence risk crossed threshold";
   return event.reason || event.reason_code || "No explanation";
 }
 
 function technicalExplanation(event) {
   const riskEvent = event.risk_event ?? {};
+  if (event.reason_code === "demo_source_control_write_approval") {
+    return `A deterministic policy requires human approval before a coding agent writes to source control. The Markov-chain score is ${scoreLabel(event)} against threshold ${thresholdLabel(event)}, so the sequence model is not the blocker here; the explicit policy is.`;
+  }
+  if (event.reason_code === "demo_block_destructive_action") {
+    return "A deterministic safety rule blocked this before the model decision mattered. This is the delete-prod class: force pushes, secret reads, recursive deletes, or destructive cloud operations.";
+  }
+  if (event.reason_code === "user_approved_action") {
+    return "This action matched a user approval you gave from the dashboard. The approval only changes this local daemon state.";
+  }
   if (event.reason_code === "model_risk_threshold") {
     return `The Markov-chain model scored this normalized action at ${scoreLabel(event)}, at or above the local threshold ${thresholdLabel(event)}. In plain terms: actions like this are statistically closer to known unsafe sequences than normal coding flow.`;
   }
@@ -290,6 +336,9 @@ function technicalExplanation(event) {
 }
 
 function decisionSource(event) {
+  if (event.reason_code === "demo_source_control_write_approval") return "Deterministic policy";
+  if (event.reason_code === "demo_block_destructive_action") return "Deterministic block";
+  if (event.reason_code === "user_approved_action") return "User approval";
   if (event.reason_code === "model_risk_threshold") return "Markov-chain model";
   if (event.reason_code === "async_telemetry") return "Trace history";
   if (isDeterministicGuard(event)) return "Deterministic guard";

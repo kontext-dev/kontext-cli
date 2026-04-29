@@ -9,6 +9,7 @@ type HookEvent struct {
 	SessionID     string         `json:"session_id"`
 	Agent         string         `json:"agent,omitempty"`
 	HookEventName string         `json:"hook_event_name"`
+	UserPrompt    string         `json:"user_prompt,omitempty"`
 	ToolName      string         `json:"tool_name,omitempty"`
 	ToolInput     map[string]any `json:"tool_input,omitempty"`
 	ToolResponse  map[string]any `json:"tool_response,omitempty"`
@@ -51,6 +52,8 @@ type RiskEvent struct {
 	PathClass          string    `json:"path_class,omitempty"`
 	CommandSummary     string    `json:"command_summary,omitempty"`
 	RequestSummary     string    `json:"request_summary,omitempty"`
+	SessionIntent      string    `json:"session_intent,omitempty"`
+	IntentAlignment    string    `json:"intent_alignment,omitempty"`
 	Decision           Decision  `json:"decision,omitempty"`
 	ReasonCode         string    `json:"reason_code,omitempty"`
 	ModelVersion       string    `json:"model_version,omitempty"`

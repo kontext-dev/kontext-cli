@@ -38,6 +38,15 @@ const (
 	hookModeEnforce hookMode = "enforce"
 )
 
+type ExitError struct {
+	Code    int
+	Message string
+}
+
+func (e ExitError) Error() string {
+	return e.Message
+}
+
 // Run executes the Kontext command line.
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -109,6 +118,7 @@ func runDaemon(args []string, out io.Writer) error {
 	horizon := fs.Int("horizon", defaultHorizon, "Markov-chain risk horizon")
 	skipHookInstall := fs.Bool("skip-hook-install", false, "skip Claude Code hook install")
 	noOpen := fs.Bool("no-open", false, "do not open the local dashboard")
+	demo := fs.Bool("demo", envString("KONTEXT_GUARD_DEMO", "") == "1", "run local demo mode with enforcing hooks and intent validation")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -116,7 +126,7 @@ func runDaemon(args []string, out io.Writer) error {
 		if err := verifyClaudeCode(); err != nil {
 			return err
 		}
-		if err := installClaudeHooks(out); err != nil {
+		if err := installClaudeHooks(out, *demo); err != nil {
 			return err
 		}
 	}
@@ -128,7 +138,7 @@ func runDaemon(args []string, out io.Writer) error {
 		}
 		scorer = loaded
 	}
-	localServer, closeStore, err := server.OpenDefaultServer(*dbPath, scorer)
+	localServer, closeStore, err := server.OpenDefaultServer(*dbPath, scorer, server.Options{DemoMode: *demo})
 	if err != nil {
 		return err
 	}
@@ -136,7 +146,11 @@ func runDaemon(args []string, out io.Writer) error {
 		_ = closeStore()
 	}()
 	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
-	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
+	if *demo {
+		fmt.Fprintln(out, "Mode: demo enforce (normal actions pass; ask/deny actions are blocked until approved).")
+	} else {
+		fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
+	}
 	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
 	fmt.Fprintf(out, "Risk model: %s\n", *modelPath)
 	if !*noOpen {
@@ -195,7 +209,30 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if event.HookEventName != "PreToolUse" {
 		decision = risk.DecisionAllow
 	}
+	if event.HookEventName == "PreToolUse" && hookMode == hookModeEnforce && decision == risk.DecisionAsk {
+		fmt.Fprintf(stderr, "Kontext paused this tool call. Approve or reject it in the local dashboard: %s\n", defaultBaseURL)
+		approval, waitErr := client.WaitApproval(ctx, result.EventID)
+		if waitErr != nil {
+			reason := "approval timed out or failed"
+			writeClaudeDecision(stdout, event.HookEventName, risk.DecisionDeny, reason, hookMode)
+			fmt.Fprintf(stderr, "Blocked by Kontext: %s\n", reason)
+			return ExitError{Code: 2, Message: reason}
+		}
+		if approval == risk.DecisionAllow {
+			writeClaudeDecision(stdout, event.HookEventName, risk.DecisionAllow, "approved in Kontext dashboard", hookMode)
+			return nil
+		}
+		reason := "rejected in Kontext dashboard"
+		writeClaudeDecision(stdout, event.HookEventName, risk.DecisionDeny, reason, hookMode)
+		fmt.Fprintf(stderr, "Blocked by Kontext: %s\n", reason)
+		return ExitError{Code: 2, Message: reason}
+	}
+	reason := formatHookReason(decision, result.Reason, hookMode)
 	writeClaudeDecision(stdout, event.HookEventName, decision, result.Reason, hookMode)
+	if event.HookEventName == "PreToolUse" && hookMode == hookModeEnforce && decision == risk.DecisionDeny {
+		fmt.Fprintf(stderr, "Blocked by Kontext: %s\n", reason)
+		return ExitError{Code: 2, Message: reason}
+	}
 	return nil
 }
 
@@ -219,6 +256,7 @@ func decodeClaudeHook(r io.Reader) (risk.HookEvent, error) {
 		SessionID:     stringValue(raw, "session_id", "sessionId"),
 		Agent:         "claude-code",
 		HookEventName: stringValue(raw, "hook_event_name", "hookEventName"),
+		UserPrompt:    stringValue(raw, "prompt", "message", "user_prompt", "userPrompt"),
 		ToolName:      stringValue(raw, "tool_name", "toolName"),
 		ToolUseID:     stringValue(raw, "tool_use_id", "toolUseID", "toolUseId"),
 		CWD:           stringValue(raw, "cwd"),
@@ -226,6 +264,11 @@ func decodeClaudeHook(r io.Reader) (risk.HookEvent, error) {
 	}
 	if event.HookEventName == "" {
 		event.HookEventName = stringValue(raw, "hook_event")
+	}
+	if event.UserPrompt == "" {
+		if value, ok := raw["input"].(string); ok {
+			event.UserPrompt = value
+		}
 	}
 	if input, ok := raw["tool_input"].(map[string]any); ok {
 		event.ToolInput = input
@@ -267,6 +310,12 @@ func formatHookReason(decision risk.Decision, reason string, mode hookMode) stri
 	}
 	if mode == hookModeObserve {
 		return fmt.Sprintf("Kontext observe mode: would %s; %s", decision, reason)
+	}
+	if decision == risk.DecisionAsk {
+		return fmt.Sprintf("Kontext needs approval in the local dashboard: %s. Open %s, click Allow once, then retry the tool call.", reason, defaultBaseURL)
+	}
+	if decision == risk.DecisionDeny {
+		return fmt.Sprintf("Kontext blocked this before execution: %s", reason)
 	}
 	return reason
 }
@@ -366,7 +415,7 @@ func PrintHookStatus(out io.Writer) {
 	for _, raw := range hooks {
 		for _, command := range hookCommands(raw) {
 			switch {
-			case strings.Contains(command, "kontext guard hook claude-code"):
+			case isGuardHookCommand(command):
 				guard = true
 				fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
 			case strings.Contains(command, "kontext hook"):
@@ -424,7 +473,7 @@ func runHooks(args []string, out io.Writer) error {
 	}
 	switch args[0] {
 	case "install":
-		return installClaudeHooks(out)
+		return installClaudeHooks(out, envString("KONTEXT_GUARD_DEMO", "") == "1")
 	case "uninstall":
 		return uninstallClaudeHooks(out)
 	default:
@@ -432,7 +481,7 @@ func runHooks(args []string, out io.Writer) error {
 	}
 }
 
-func installClaudeHooks(out io.Writer) error {
+func installClaudeHooks(out io.Writer, demo bool) error {
 	settingsPath, settings, err := readClaudeSettings()
 	if err != nil {
 		return err
@@ -441,13 +490,20 @@ func installClaudeHooks(out io.Writer) error {
 		return err
 	}
 	hookCommand := installedHookCommand()
+	if demo {
+		hookCommand = fmt.Sprintf("KONTEXT_GUARD_DEMO=1 KONTEXT_MODE=enforce %s", hookCommand)
+	}
 	settings["hooks"] = mergeHooks(settings["hooks"], hookCommand)
 	if err := writeJSONFile(settingsPath, settings); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Installed Kontext Guard Claude Code hooks into %s\n", settingsPath)
 	fmt.Fprintf(out, "Hook command: %s\n", hookCommand)
-	fmt.Fprintln(out, "Default mode is observe. Set KONTEXT_MODE=enforce later to block ask/deny decisions.")
+	if demo {
+		fmt.Fprintln(out, "Demo mode is enforce. Ask/deny decisions block Claude Code until approved.")
+	} else {
+		fmt.Fprintln(out, "Default mode is observe. Set KONTEXT_MODE=enforce later to block ask/deny decisions.")
+	}
 	return nil
 }
 
@@ -559,7 +615,12 @@ func mergeHooks(raw any, hookCommand string) map[string]any {
 
 func isGuardHookEntry(entry any) bool {
 	text := fmt.Sprintf("%v", entry)
-	return strings.Contains(text, "kontext guard hook claude-code")
+	return isGuardHookCommand(text)
+}
+
+func isGuardHookCommand(command string) bool {
+	return strings.Contains(command, "guard hook claude-code") ||
+		strings.Contains(command, "kontext-guard") && strings.Contains(command, "hook claude-code")
 }
 
 func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
@@ -765,11 +826,15 @@ func installedHookCommand() string {
 		return command
 	}
 	path := selfPath()
-	if strings.Contains(path, "go-build") {
-		if cwd, err := os.Getwd(); err == nil {
-			if _, statErr := os.Stat(filepath.Join(cwd, "cmd", "kontext")); statErr == nil {
-				return fmt.Sprintf("cd %s && go run ./cmd/kontext guard hook claude-code", shellQuote(cwd))
-			}
+	if !strings.Contains(path, "go-build") {
+		return fmt.Sprintf("%s guard hook claude-code", shellQuote(path))
+	}
+	if path, err := exec.LookPath("kontext"); err == nil && path != "" {
+		return fmt.Sprintf("%s guard hook claude-code", shellQuote(path))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if _, statErr := os.Stat(filepath.Join(cwd, "cmd", "kontext")); statErr == nil {
+			return fmt.Sprintf("cd %s && go run ./cmd/kontext guard hook claude-code", shellQuote(cwd))
 		}
 	}
 	return fmt.Sprintf("%s guard hook claude-code", shellQuote(path))
