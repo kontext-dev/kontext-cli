@@ -2,6 +2,7 @@ package sidecar
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -94,13 +95,36 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	result := defaultAllowResult()
-	if err := WriteMessage(conn, result); err != nil {
-		s.diagnostic.Printf("sidecar write: %v\n", err)
-		return
+	if req.HookEvent == "PreToolUse" {
+		// Synchronous: call server, wait for authorization decision.
+		protoReq := buildHookEventRequest(s.sessionID, s.agentName, &req)
+		resp, err := s.client.ProcessHookEvent(ctx, protoReq)
+		if err != nil {
+			s.diagnostic.Printf("sidecar ProcessHookEvent: %v\n", err)
+			result := EvaluateResult{
+				Type:     "result",
+				Allowed:  false,
+				Decision: "deny",
+				Reason:   "authorization service unreachable",
+			}
+			if writeErr := WriteMessage(conn, result); writeErr != nil {
+				s.diagnostic.Printf("sidecar write: %v\n", writeErr)
+			}
+			return
+		}
+		result := mapServerResponse(resp)
+		if err := WriteMessage(conn, result); err != nil {
+			s.diagnostic.Printf("sidecar write: %v\n", err)
+		}
+	} else {
+		// PostToolUse, UserPromptSubmit: allow immediately, telemetry async.
+		result := EvaluateResult{Type: "result", Allowed: true, Decision: "allow"}
+		if err := WriteMessage(conn, result); err != nil {
+			s.diagnostic.Printf("sidecar write: %v\n", err)
+			return
+		}
+		go s.ingestEvent(ctx, &req)
 	}
-
-	go s.ingestEvent(ctx, &req)
 }
 
 func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
@@ -111,7 +135,45 @@ func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 }
 
 func defaultAllowResult() EvaluateResult {
-	return EvaluateResult{Type: "result", Allowed: true}
+	return EvaluateResult{Type: "result", Allowed: true, Decision: "allow"}
+}
+
+// mapServerResponse converts a ProcessHookEventResponse into an EvaluateResult.
+// ASK is encoded as deny because Claude Code only understands allow/deny;
+// the reason message guides the developer to seek admin approval.
+func mapServerResponse(resp *agentv1.ProcessHookEventResponse) EvaluateResult {
+	switch resp.GetDecision() {
+	case agentv1.Decision_DECISION_ALLOW:
+		return EvaluateResult{
+			Type:     "result",
+			Allowed:  true,
+			Decision: "allow",
+			Reason:   resp.GetReason(),
+		}
+	case agentv1.Decision_DECISION_DENY:
+		return EvaluateResult{
+			Type:     "result",
+			Allowed:  false,
+			Decision: "deny",
+			Reason:   resp.GetReason(),
+		}
+	case agentv1.Decision_DECISION_ASK:
+		return EvaluateResult{
+			Type:      "result",
+			Allowed:   false,
+			Decision:  "deny",
+			Reason:    fmt.Sprintf("Access request created: %s. Ask your admin to approve at your organization's Access page.", resp.GetEventId()),
+			RequestID: resp.GetEventId(),
+		}
+	default:
+		// DECISION_UNSPECIFIED or unknown — fail closed.
+		return EvaluateResult{
+			Type:     "result",
+			Allowed:  false,
+			Decision: "deny",
+			Reason:   "unknown authorization decision",
+		}
+	}
 }
 
 func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {

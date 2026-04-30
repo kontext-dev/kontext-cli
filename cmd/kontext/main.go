@@ -178,11 +178,11 @@ func hookCmd() *cobra.Command {
 func evaluateViaSidecar(socketPath, agentName string, e *agent.HookEvent) (bool, string, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
-		return true, "sidecar unreachable", nil
+		return false, "sidecar unreachable", nil
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return true, "sidecar deadline error", nil
+		return false, "sidecar deadline error", nil
 	}
 
 	req := sidecar.EvaluateRequest{
@@ -197,25 +197,25 @@ func evaluateViaSidecar(socketPath, agentName string, e *agent.HookEvent) (bool,
 	if e.ToolInput != nil {
 		data, err := marshalJSON(e.ToolInput)
 		if err != nil {
-			return true, "sidecar marshal error", nil
+			return false, "sidecar marshal error", nil
 		}
 		req.ToolInput = data
 	}
 	if e.ToolResponse != nil {
 		data, err := marshalJSON(e.ToolResponse)
 		if err != nil {
-			return true, "sidecar marshal error", nil
+			return false, "sidecar marshal error", nil
 		}
 		req.ToolResponse = data
 	}
 
 	if err := sidecar.WriteMessage(conn, req); err != nil {
-		return true, "sidecar write error", nil
+		return false, "sidecar write error", nil
 	}
 
 	var result sidecar.EvaluateResult
 	if err := sidecar.ReadMessage(conn, &result); err != nil {
-		return true, "sidecar read error", nil
+		return false, "sidecar read error", nil
 	}
 
 	return result.Allowed, result.Reason, nil

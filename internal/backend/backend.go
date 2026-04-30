@@ -28,9 +28,11 @@ type Client struct {
 
 // NewClient creates a ConnectRPC client that fetches a fresh token per request.
 func NewClient(baseURL string, ts TokenSource) *Client {
+	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
+	baseTransport.ForceAttemptHTTP2 = false
 	httpClient := &http.Client{
 		Timeout:   30 * time.Second,
-		Transport: &bearerTransport{tokenSource: ts, base: http.DefaultTransport},
+		Transport: &bearerTransport{tokenSource: ts, base: baseTransport},
 	}
 
 	return &Client{
@@ -86,13 +88,23 @@ func (c *Client) EndSession(ctx context.Context, sessionID string) error {
 	return err
 }
 
-// IngestEvent sends a single hook event via the ProcessHookEvent unary RPC.
-func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error {
-	_, err := c.rpc.ProcessHookEvent(ctx, connect.NewRequest(req))
+// ProcessHookEvent calls the ProcessHookEvent RPC and returns the server's
+// authorization decision. Use this for PreToolUse events where the response
+// determines whether the tool invocation is allowed.
+func (c *Client) ProcessHookEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) (*agentv1.ProcessHookEventResponse, error) {
+	resp, err := c.rpc.ProcessHookEvent(ctx, connect.NewRequest(req))
 	if err != nil {
-		return fmt.Errorf("ProcessHookEvent: %w", err)
+		return nil, fmt.Errorf("ProcessHookEvent: %w", err)
 	}
-	return nil
+	return resp.Msg, nil
+}
+
+// IngestEvent sends a single hook event via the ProcessHookEvent unary RPC,
+// discarding the response. Use this for fire-and-forget telemetry events
+// (PostToolUse, UserPromptSubmit) where the server decision is not needed.
+func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error {
+	_, err := c.ProcessHookEvent(ctx, req)
+	return err
 }
 
 // bearerTransport fetches a fresh token for every outgoing request.

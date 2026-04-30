@@ -81,13 +81,13 @@ Provider setup and trace review live in the hosted dashboard at [app.kontext.sec
 
 ## What You Get
 
-| Capability | What it means |
-| --- | --- |
-| Ephemeral credentials | Short-lived tokens are injected only for the active agent session. |
-| Managed env file | The CLI creates and updates `.env.kontext` with provider placeholders. |
-| Hosted connect | Missing user providers open a browser flow instead of leaking keys locally. |
-| Governed sessions | PreToolUse, PostToolUse, and UserPromptSubmit events stream to Kontext. |
-| Native runtime | A small Go binary, no local daemon, no Docker, no Node or Python runtime. |
+| Capability            | What it means                                                               |
+| --------------------- | --------------------------------------------------------------------------- |
+| Ephemeral credentials | Short-lived tokens are injected only for the active agent session.          |
+| Managed env file      | The CLI creates and updates `.env.kontext` with provider placeholders.      |
+| Hosted connect        | Missing user providers open a browser flow instead of leaking keys locally. |
+| Governed sessions     | PreToolUse, PostToolUse, and UserPromptSubmit events stream to Kontext.     |
+| Native runtime        | A small Go binary, no local daemon, no Docker, no Node or Python runtime.   |
 
 ## Security
 
@@ -98,8 +98,8 @@ Provider setup and trace review live in the hosted dashboard at [app.kontext.sec
 
 ## Supported Agents
 
-| Agent | Flag | Status |
-| --- | --- | --- |
+| Agent       | Flag             | Status |
+| ----------- | ---------------- | ------ |
 | Claude Code | `--agent claude` | Active |
 
 Cursor and Codex support are planned, but they are not shipped in this repo yet.

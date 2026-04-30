@@ -68,7 +68,7 @@ func TestLogoutCmdWrapsUnexpectedErrors(t *testing.T) {
 	}
 }
 
-func TestEvaluateViaSidecarFailsOpenOnMarshalErrors(t *testing.T) {
+func TestEvaluateViaSidecarFailsClosedOnMarshalErrors(t *testing.T) {
 	t.Parallel()
 
 	socketPath := fmt.Sprintf("/tmp/kontext-test-%d.sock", time.Now().UnixNano())
@@ -103,8 +103,8 @@ func TestEvaluateViaSidecarFailsOpenOnMarshalErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("evaluateViaSidecar() error = %v", err)
 			}
-			if !allowed {
-				t.Fatal("evaluateViaSidecar() allowed = false, want true")
+			if allowed {
+				t.Fatal("evaluateViaSidecar() allowed = true, want false (fail closed)")
 			}
 			if reason != "sidecar marshal error" {
 				t.Fatalf("evaluateViaSidecar() reason = %q, want sidecar marshal error", reason)

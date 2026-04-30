@@ -20,9 +20,11 @@ type EvaluateRequest struct {
 }
 
 type EvaluateResult struct {
-	Type    string `json:"type"`
-	Allowed bool   `json:"allowed"`
-	Reason  string `json:"reason"`
+	Type      string `json:"type"`
+	Allowed   bool   `json:"allowed"`
+	Decision  string `json:"decision,omitempty"`
+	Reason    string `json:"reason"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 func WriteMessage(conn net.Conn, v any) error {
