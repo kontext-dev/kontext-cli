@@ -32,6 +32,8 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 )
 
+const proactiveRefreshWindow = 15 * time.Minute
+
 // Options configures a kontext start run.
 type Options struct {
 	Agent        string
@@ -104,63 +106,52 @@ func Start(ctx context.Context, opts Options) error {
 	fmt.Fprintf(os.Stderr, "✓ Session: %s (%s)\n", createResp.SessionName, truncateID(sessionID))
 
 	// 4. Bootstrap the shared CLI application and sync the local env file.
-	templateExists := false
-	if _, err := os.Stat(opts.TemplateFile); err == nil {
-		templateExists = true
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat env template: %w", err)
-	}
-
-	bootstrapResp, bootstrapErr := client.BootstrapCli(ctx, &agentv1.BootstrapCliRequest{
+	// Bootstrap is a required setup step: the backend creates or resolves the
+	// reserved kontext-cli application and marks the org as CLI-onboarded. The
+	// dashboard relies on this state to skip generic onboarding, so a failure
+	// here must abort — a half-set-up session would leave the org looking
+	// un-onboarded while the CLI appears to work.
+	bootstrapResp, err := client.BootstrapCli(ctx, &agentv1.BootstrapCliRequest{
 		AgentId: createResp.AgentId,
 	})
-	if bootstrapErr != nil && !templateExists {
-		return fmt.Errorf("bootstrap cli application: %w", bootstrapErr)
+	if err != nil {
+		return fmt.Errorf("bootstrap cli application: %w", err)
 	}
+	fmt.Fprintln(os.Stderr, "✓ Kontext CLI bootstrap complete")
 
-	var templateDoc *credential.TemplateFile
-	if bootstrapErr != nil {
-		diagnostics.Printf("provider sync skipped: %v\n", bootstrapErr)
-		fmt.Fprintln(os.Stderr, "⚠ Provider sync skipped; using the local env template.")
-		templateDoc, err = credential.LoadTemplateFile(opts.TemplateFile)
-		if err != nil {
-			return fmt.Errorf("load env template: %w", err)
-		}
-	} else {
-		syncResult, err := credential.EnsureManagedTemplate(
+	syncResult, err := credential.EnsureManagedTemplate(
+		opts.TemplateFile,
+		managedProvidersFromBootstrap(bootstrapResp.ManagedProviders),
+	)
+	if err != nil {
+		return fmt.Errorf("sync env template: %w", err)
+	}
+	templateDoc := syncResult.Template
+	if syncResult.Created {
+		fmt.Fprintf(
+			os.Stderr,
+			"✓ Created local %s automatically\n",
 			opts.TemplateFile,
-			managedProvidersFromBootstrap(bootstrapResp.ManagedProviders),
 		)
-		if err != nil {
-			return fmt.Errorf("sync env template: %w", err)
-		}
-		templateDoc = syncResult.Template
-		if syncResult.Created {
-			fmt.Fprintf(
-				os.Stderr,
-				"✓ Created local %s automatically\n",
-				opts.TemplateFile,
-			)
-		}
-		if syncResult.Updated {
-			fmt.Fprintf(
-				os.Stderr,
-				"✓ Updated %s with managed preset entries: %s\n",
-				opts.TemplateFile,
-				joinManagedEnvVars(syncResult.Added),
-			)
-		}
-		for _, provider := range syncResult.CollisionSkipped {
-			fmt.Fprintf(
-				os.Stderr,
-				"⚠ Skipped auto-adding %s because that key already exists in %s\n",
-				provider.EnvVar,
-				opts.TemplateFile,
-			)
-		}
-		if templateDoc != nil && !templateDoc.SafeToMutate && templateDoc.MutationWarning != "" {
-			fmt.Fprintf(os.Stderr, "⚠ %s\n", templateDoc.MutationWarning)
-		}
+	}
+	if syncResult.Updated {
+		fmt.Fprintf(
+			os.Stderr,
+			"✓ Updated %s with managed preset entries: %s\n",
+			opts.TemplateFile,
+			joinManagedEnvVars(syncResult.Added),
+		)
+	}
+	for _, provider := range syncResult.CollisionSkipped {
+		fmt.Fprintf(
+			os.Stderr,
+			"⚠ Skipped auto-adding %s because that key already exists in %s\n",
+			provider.EnvVar,
+			opts.TemplateFile,
+		)
+	}
+	if templateDoc != nil && !templateDoc.SafeToMutate && templateDoc.MutationWarning != "" {
+		fmt.Fprintf(os.Stderr, "⚠ %s\n", templateDoc.MutationWarning)
 	}
 
 	for _, invalid := range templateDoc.InvalidPlaceholders {
@@ -910,13 +901,13 @@ func newSessionTokenSource(ctx context.Context, session *auth.Session, diagnosti
 		mu.Lock()
 		defer mu.Unlock()
 
-		if !forceRefresh && !session.IsExpired() {
+		if !shouldRefreshSession(session, forceRefresh, time.Now()) {
 			return session.AccessToken, nil
 		}
 
 		refreshed, err := auth.RefreshSession(ctx, session)
 		if err != nil {
-			return "", fmt.Errorf("token expired and refresh failed: %w", err)
+			return "", fmt.Errorf("token refresh failed: %w", err)
 		}
 
 		fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
@@ -931,6 +922,10 @@ func newSessionTokenSource(ctx context.Context, session *auth.Session, diagnosti
 		*session = *refreshed
 		return session.AccessToken, nil
 	}
+}
+
+func shouldRefreshSession(session *auth.Session, forceRefresh bool, now time.Time) bool {
+	return forceRefresh || !now.Before(session.ExpiresAt.Add(-proactiveRefreshWindow))
 }
 
 func preflightAgent(agentName string) (string, error) {

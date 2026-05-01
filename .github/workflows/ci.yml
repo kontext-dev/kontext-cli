@@ -26,11 +26,31 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@26f6d4f2c533a43e6b5da0b4a5dd983f98f7b49a # v6.0.4
+        with:
+          version: 10.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
       - name: Download modules
         run: go mod download
 
       - name: Verify modules
         run: go mod verify
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Guard dashboard assets
+        run: pnpm build
+
+      - name: Check Guard dashboard assets
+        run: git diff --exit-code internal/guard/web/assets
 
       - name: Check formatting
         run: test -z "$(gofmt -l $(find cmd internal -name '*.go' -type f))"
@@ -43,6 +63,12 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      - name: Guard smoke test
+        run: go run ./cmd/kontext guard smoke-test
+
+      - name: Guard local E2E
+        run: make guard-e2e
 
       - name: Check vulnerabilities
         run: |
