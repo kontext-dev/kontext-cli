@@ -27,7 +27,7 @@ jobs:
           cache: true
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@26f6d4f2c533a43e6b5da0b4a5dd983f98f7b49a # v4.1.0
+        uses: pnpm/action-setup@26f6d4f2c533a43e6b5da0b4a5dd983f98f7b49a # v6.0.4
         with:
           version: 10.0.0
 
