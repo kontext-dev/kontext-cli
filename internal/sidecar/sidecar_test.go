@@ -22,47 +22,12 @@ func TestHeartbeatDeduplication(t *testing.T) {
 
 	var buf bytes.Buffer
 	logger := newTestLogger(&buf)
+	state := newHeartbeatState()
+	now := time.Unix(100, 0)
 
-	s := &Server{
-		diagnostic: logger,
-		sessionID:  "test-session",
-	}
-
-	// Mimic what heartbeatLoop would do with dedup logic:
-	interval := 30 * time.Second
-	var lastErr string
-	failureStart := time.Time{}
-
-	// First two calls: same error (dedup → only 1 log)
-	// Third call: success (recovery log)
-	for i := 0; i < 3; i++ {
-		var err error
-		if i < 2 {
-			err = errors.New("connection refused")
-		}
-		if err != nil {
-			errStr := err.Error()
-			if lastErr != errStr {
-				s.diagnostic.Printf("sidecar heartbeat: %v\n", err)
-				lastErr = errStr
-			}
-			if failureStart.IsZero() {
-				failureStart = time.Now()
-			}
-			interval *= 2
-			if interval > 300*time.Second {
-				interval = 300 * time.Second
-			}
-		} else {
-			if !failureStart.IsZero() {
-				elapsed := time.Since(failureStart).Truncate(time.Second)
-				s.diagnostic.Printf("sidecar: heartbeat recovered after %s\n", elapsed)
-				failureStart = time.Time{}
-				lastErr = ""
-			}
-			interval = 30 * time.Second
-		}
-	}
+	state.record(now, errors.New("connection refused"), logger.Printf)
+	state.record(now.Add(time.Second), errors.New("connection refused"), logger.Printf)
+	state.record(now.Add(5*time.Second), nil, logger.Printf)
 
 	output := buf.String()
 	errCount := strings.Count(output, "sidecar heartbeat:")
@@ -80,19 +45,11 @@ func TestHeartbeatDifferentErrorsBothLogged(t *testing.T) {
 
 	var buf bytes.Buffer
 	logger := newTestLogger(&buf)
-	s := &Server{
-		diagnostic: logger,
-		sessionID:  "test-session",
-	}
+	state := newHeartbeatState()
+	now := time.Unix(100, 0)
 
-	// Simulate two different errors
-	var lastErr string
-	for _, errStr := range []string{"error A", "error B"} {
-		if lastErr != errStr {
-			s.diagnostic.Printf("sidecar heartbeat: %s\n", errStr)
-			lastErr = errStr
-		}
-	}
+	state.record(now, errors.New("error A"), logger.Printf)
+	state.record(now.Add(time.Second), errors.New("error B"), logger.Printf)
 
 	output := buf.String()
 	errCount := strings.Count(output, "sidecar heartbeat:")
@@ -104,44 +61,24 @@ func TestHeartbeatDifferentErrorsBothLogged(t *testing.T) {
 func TestHeartbeatBackoffIntervalCalculation(t *testing.T) {
 	t.Parallel()
 
-	const (
-		minInterval = 30 * time.Second
-		maxInterval = 5 * time.Minute
-	)
-
-	interval := minInterval
-
-	// First failure: 30s -> 60s
-	interval *= 2
-	if interval != 60*time.Second {
-		t.Fatalf("after 1st failure: interval = %v, want 60s", interval)
+	state := newHeartbeatState()
+	now := time.Unix(100, 0)
+	want := []time.Duration{
+		60 * time.Second,
+		120 * time.Second,
+		240 * time.Second,
+		heartbeatMaxInterval,
+		heartbeatMaxInterval,
 	}
-
-	// Second failure: 60s -> 120s
-	interval *= 2
-	if interval != 120*time.Second {
-		t.Fatalf("after 2nd failure: interval = %v, want 120s", interval)
+	for i, interval := range want {
+		state.record(now.Add(time.Duration(i)*time.Second), errors.New("offline"), func(string, ...any) {})
+		if got := state.nextInterval(); got != interval {
+			t.Fatalf("after failure %d: interval = %v, want %v", i+1, got, interval)
+		}
 	}
-
-	// Third failure: 120s -> 240s
-	interval *= 2
-	if interval != 240*time.Second {
-		t.Fatalf("after 3rd failure: interval = %v, want 240s", interval)
-	}
-
-	// Fourth failure: 240s -> 480s, capped at 300s
-	interval *= 2
-	if interval > maxInterval {
-		interval = maxInterval
-	}
-	if interval != 300*time.Second {
-		t.Fatalf("after 4th failure: interval = %v, want 300s (capped)", interval)
-	}
-
-	// Success resets to 30s
-	interval = minInterval
-	if interval != 30*time.Second {
-		t.Fatalf("after success: interval = %v, want 30s", interval)
+	state.record(now.Add(10*time.Second), nil, func(string, ...any) {})
+	if got := state.nextInterval(); got != heartbeatMinInterval {
+		t.Fatalf("after success: interval = %v, want %v", got, heartbeatMinInterval)
 	}
 }
 
