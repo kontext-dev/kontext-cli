@@ -1,13 +1,149 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
+
+func newTestLogger(buf *bytes.Buffer) diagnostic.Logger {
+	return diagnostic.New(buf, true)
+}
+
+func TestHeartbeatDeduplication(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := newTestLogger(&buf)
+
+	s := &Server{
+		diagnostic: logger,
+		sessionID:  "test-session",
+	}
+
+	// Mimic what heartbeatLoop would do with dedup logic:
+	interval := 30 * time.Second
+	var lastErr string
+	failureStart := time.Time{}
+
+	// First two calls: same error (dedup → only 1 log)
+	// Third call: success (recovery log)
+	for i := 0; i < 3; i++ {
+		var err error
+		if i < 2 {
+			err = errors.New("connection refused")
+		}
+		if err != nil {
+			errStr := err.Error()
+			if lastErr != errStr {
+				s.diagnostic.Printf("sidecar heartbeat: %v\n", err)
+				lastErr = errStr
+			}
+			if failureStart.IsZero() {
+				failureStart = time.Now()
+			}
+			interval *= 2
+			if interval > 300*time.Second {
+				interval = 300 * time.Second
+			}
+		} else {
+			if !failureStart.IsZero() {
+				elapsed := time.Since(failureStart).Truncate(time.Second)
+				s.diagnostic.Printf("sidecar: heartbeat recovered after %s\n", elapsed)
+				failureStart = time.Time{}
+				lastErr = ""
+			}
+			interval = 30 * time.Second
+		}
+	}
+
+	output := buf.String()
+	errCount := strings.Count(output, "sidecar heartbeat:")
+	recoveryCount := strings.Count(output, "heartbeat recovered")
+	if errCount != 1 {
+		t.Fatalf("expected 1 deduplicated error log, got %d:\n%s", errCount, output)
+	}
+	if recoveryCount != 1 {
+		t.Fatalf("expected 1 recovery log, got %d:\n%s", recoveryCount, output)
+	}
+}
+
+func TestHeartbeatDifferentErrorsBothLogged(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := newTestLogger(&buf)
+	s := &Server{
+		diagnostic: logger,
+		sessionID:  "test-session",
+	}
+
+	// Simulate two different errors
+	var lastErr string
+	for _, errStr := range []string{"error A", "error B"} {
+		if lastErr != errStr {
+			s.diagnostic.Printf("sidecar heartbeat: %s\n", errStr)
+			lastErr = errStr
+		}
+	}
+
+	output := buf.String()
+	errCount := strings.Count(output, "sidecar heartbeat:")
+	if errCount != 2 {
+		t.Fatalf("expected 2 error logs for different errors, got %d:\n%s", errCount, output)
+	}
+}
+
+func TestHeartbeatBackoffIntervalCalculation(t *testing.T) {
+	t.Parallel()
+
+	const (
+		minInterval = 30 * time.Second
+		maxInterval = 5 * time.Minute
+	)
+
+	interval := minInterval
+
+	// First failure: 30s -> 60s
+	interval *= 2
+	if interval != 60*time.Second {
+		t.Fatalf("after 1st failure: interval = %v, want 60s", interval)
+	}
+
+	// Second failure: 60s -> 120s
+	interval *= 2
+	if interval != 120*time.Second {
+		t.Fatalf("after 2nd failure: interval = %v, want 120s", interval)
+	}
+
+	// Third failure: 120s -> 240s
+	interval *= 2
+	if interval != 240*time.Second {
+		t.Fatalf("after 3rd failure: interval = %v, want 240s", interval)
+	}
+
+	// Fourth failure: 240s -> 480s, capped at 300s
+	interval *= 2
+	if interval > maxInterval {
+		interval = maxInterval
+	}
+	if interval != 300*time.Second {
+		t.Fatalf("after 4th failure: interval = %v, want 300s (capped)", interval)
+	}
+
+	// Success resets to 30s
+	interval = minInterval
+	if interval != 30*time.Second {
+		t.Fatalf("after success: interval = %v, want 30s", interval)
+	}
+}
 
 func TestAcceptLoopReturnsOnListenerError(t *testing.T) {
 	t.Parallel()

@@ -8,22 +8,27 @@ import (
 	"time"
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
-	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
+
+// client abstracts backend calls for testing.
+type client interface {
+	Heartbeat(ctx context.Context, sessionID string) error
+	IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error
+}
 
 type Server struct {
 	socketPath string
 	listener   net.Listener
 	sessionID  string
 	agentName  string
-	client     *backend.Client
+	client     client
 	diagnostic diagnostic.Logger
 	cancel     context.CancelFunc
 }
 
 // New creates a new sidecar server.
-func New(sessionDir string, client *backend.Client, sessionID, agentName string, diagnostics diagnostic.Logger) (*Server, error) {
+func New(sessionDir string, client client, sessionID, agentName string, diagnostics diagnostic.Logger) (*Server, error) {
 	return &Server{
 		socketPath: filepath.Join(sessionDir, "kontext.sock"),
 		sessionID:  sessionID,
@@ -110,6 +115,56 @@ func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 	}
 }
 
+func (s *Server) heartbeatLoop(ctx context.Context) {
+	const (
+		minInterval = 30 * time.Second
+		maxInterval = 5 * time.Minute
+	)
+
+	interval := minInterval
+	var lastErr string
+	failureStart := time.Time{}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		if err := s.client.Heartbeat(ctx, s.sessionID); err != nil {
+			errStr := err.Error()
+			if lastErr != errStr {
+				s.diagnostic.Printf("sidecar heartbeat: %v\n", err)
+				lastErr = errStr
+			}
+			if failureStart.IsZero() {
+				failureStart = time.Now()
+			}
+			interval *= 2
+			if interval > maxInterval {
+				interval = maxInterval
+			}
+		} else {
+			if !failureStart.IsZero() {
+				elapsed := time.Since(failureStart).Truncate(time.Second)
+				s.diagnostic.Printf("sidecar: heartbeat recovered after %s\n", elapsed)
+				failureStart = time.Time{}
+				lastErr = ""
+			}
+			interval = minInterval
+		}
+	}
+}
+
 func defaultAllowResult() EvaluateResult {
 	return EvaluateResult{Type: "result", Allowed: true}
 }
@@ -146,17 +201,4 @@ func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *a
 	return hookEvent
 }
 
-func (s *Server) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := s.client.Heartbeat(ctx, s.sessionID); err != nil {
-				s.diagnostic.Printf("sidecar heartbeat: %v\n", err)
-			}
-		}
-	}
-}
+
