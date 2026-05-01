@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 	"github.com/zalando/go-keyring"
 )
 
@@ -109,15 +110,15 @@ func TestEvaluateViaSidecarFailsOpenOnMarshalErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			allowed, reason, err := evaluateViaSidecar(socketPath, "claude", tt.event)
+			result, err := evaluateViaSidecar(socketPath, hookruntime.EventFromAgent("claude", tt.event))
 			if err != nil {
 				t.Fatalf("evaluateViaSidecar() error = %v", err)
 			}
-			if !allowed {
+			if !result.Allowed() {
 				t.Fatal("evaluateViaSidecar() allowed = false, want true")
 			}
-			if reason != "sidecar marshal error" {
-				t.Fatalf("evaluateViaSidecar() reason = %q, want sidecar marshal error", reason)
+			if result.Reason != "sidecar marshal error" {
+				t.Fatalf("evaluateViaSidecar() reason = %q, want sidecar marshal error", result.Reason)
 			}
 		})
 	}

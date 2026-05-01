@@ -11,9 +11,10 @@ import (
 )
 
 type stubAgent struct {
-	decodeErr error
-	allowErr  error
-	denyErr   error
+	decodeErr         error
+	allowErr          error
+	denyErr           error
+	allowUpdatedInput map[string]any
 }
 
 func (s *stubAgent) Name() string { return "stub" }
@@ -25,10 +26,11 @@ func (s *stubAgent) DecodeHookInput(input []byte) (*agent.HookEvent, error) {
 	return &agent.HookEvent{HookEventName: "PreToolUse"}, nil
 }
 
-func (s *stubAgent) EncodeAllow(event *agent.HookEvent, reason string) ([]byte, error) {
+func (s *stubAgent) EncodeAllow(event *agent.HookEvent, reason string, updatedInput map[string]any) ([]byte, error) {
 	if s.allowErr != nil {
 		return nil, s.allowErr
 	}
+	s.allowUpdatedInput = updatedInput
 	return []byte("ALLOW"), nil
 }
 
@@ -45,11 +47,13 @@ func TestRunAllowsAndWritesOutput(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{}, func(event *agent.HookEvent) (bool, string, error) {
+	stub := &stubAgent{}
+	updatedInput := map[string]any{"command": "echo ok"}
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, stub, func(event *agent.HookEvent) (bool, string, map[string]any, error) {
 		if event.HookEventName != "PreToolUse" {
 			t.Fatalf("event.HookEventName = %q, want %q", event.HookEventName, "PreToolUse")
 		}
-		return true, "ok", nil
+		return true, "ok", updatedInput, nil
 	})
 
 	if code != 0 {
@@ -61,6 +65,9 @@ func TestRunAllowsAndWritesOutput(t *testing.T) {
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
 	}
+	if stub.allowUpdatedInput["command"] != "echo ok" {
+		t.Fatalf("updated input = %#v, want command", stub.allowUpdatedInput)
+	}
 }
 
 func TestRunReturnsErrorWhenAllowEncodingFails(t *testing.T) {
@@ -69,8 +76,8 @@ func TestRunReturnsErrorWhenAllowEncodingFails(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{allowErr: errors.New("encode failed")}, func(*agent.HookEvent) (bool, string, error) {
-		return true, "ok", nil
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{allowErr: errors.New("encode failed")}, func(*agent.HookEvent) (bool, string, map[string]any, error) {
+		return true, "ok", nil, nil
 	})
 
 	if code != 2 {
@@ -89,8 +96,8 @@ func TestRunReturnsErrorWhenWriteFails(t *testing.T) {
 
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), errWriter{}, stderr, &stubAgent{}, func(*agent.HookEvent) (bool, string, error) {
-		return true, "ok", nil
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), errWriter{}, stderr, &stubAgent{}, func(*agent.HookEvent) (bool, string, map[string]any, error) {
+		return true, "ok", nil, nil
 	})
 
 	if code != 2 {
@@ -107,8 +114,8 @@ func TestRunReturnsErrorWhenDenyEncodingFails(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{denyErr: errors.New("encode failed")}, func(*agent.HookEvent) (bool, string, error) {
-		return false, "blocked", nil
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{denyErr: errors.New("encode failed")}, func(*agent.HookEvent) (bool, string, map[string]any, error) {
+		return false, "blocked", nil, nil
 	})
 
 	if code != 2 {

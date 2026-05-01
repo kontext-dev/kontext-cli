@@ -116,7 +116,7 @@ func TestDecodeHookInputPreservesExplicitZeroDuration(t *testing.T) {
 func TestEncodeAllowOmitsPlaceholderReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "allowed")
+	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "allowed", nil)
 	if err != nil {
 		t.Fatalf("EncodeAllow() error = %v", err)
 	}
@@ -128,12 +128,31 @@ func TestEncodeAllowOmitsPlaceholderReason(t *testing.T) {
 func TestEncodeAllowKeepsMeaningfulReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "Allowed by read-only policy")
+	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "Allowed by read-only policy", nil)
 	if err != nil {
 		t.Fatalf("EncodeAllow() error = %v", err)
 	}
 	if !strings.Contains(string(out), "Allowed by read-only policy") {
 		t.Fatalf("EncodeAllow() = %s, want meaningful reason", out)
+	}
+}
+
+func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
+	t.Parallel()
+
+	out, err := (&Claude{}).EncodeAllow(
+		&agent.HookEvent{HookEventName: "PreToolUse"},
+		"allowed",
+		map[string]any{"command": `GITHUB_TOKEN="$(cat '/tmp/token')" gh pr view`},
+	)
+	if err != nil {
+		t.Fatalf("EncodeAllow() error = %v", err)
+	}
+	if !strings.Contains(string(out), "updatedInput") {
+		t.Fatalf("EncodeAllow() = %s, want updatedInput", out)
+	}
+	if !strings.Contains(string(out), "suppressOutput") {
+		t.Fatalf("EncodeAllow() = %s, want suppressOutput", out)
 	}
 }
 

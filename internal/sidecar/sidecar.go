@@ -5,16 +5,20 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
+	"github.com/kontext-security/kontext-cli/internal/backend"
+	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 // sidecarClient is the backend surface used by the sidecar.
 type sidecarClient interface {
 	Heartbeat(ctx context.Context, sessionID string) error
-	IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error
+	ProcessHookEvent(context.Context, *agentv1.ProcessHookEventRequest) (*backend.ProcessHookEventResult, error)
 }
 
 const (
@@ -66,27 +70,55 @@ func (h *heartbeatState) record(now time.Time, err error, logf func(string, ...a
 }
 
 type Server struct {
-	socketPath string
-	listener   net.Listener
-	sessionID  string
-	agentName  string
-	client     sidecarClient
-	diagnostic diagnostic.Logger
-	cancel     context.CancelFunc
+	socketPath  string
+	listener    net.Listener
+	sessionID   string
+	agentName   string
+	mu          sync.RWMutex
+	accessMode  backend.HostedAccessMode
+	client      sidecarClient
+	diagnostic  diagnostic.Logger
+	cancel      context.CancelFunc
+	credentials *credentialInjector
 }
 
 // New creates a new sidecar server.
-func New(sessionDir string, client sidecarClient, sessionID, agentName string, diagnostics diagnostic.Logger) (*Server, error) {
+func New(sessionDir string, client sidecarClient, sessionID, agentName string, accessMode backend.HostedAccessMode, diagnostics diagnostic.Logger) (*Server, error) {
 	return &Server{
 		socketPath: filepath.Join(sessionDir, "kontext.sock"),
 		sessionID:  sessionID,
 		agentName:  agentName,
+		accessMode: accessMode,
 		client:     client,
 		diagnostic: diagnostics,
 	}, nil
 }
 
+func NewWithCredentials(sessionDir string, client sidecarClient, sessionID, agentName string, accessMode backend.HostedAccessMode, diagnostics diagnostic.Logger, entries []credential.Entry, resolve credentialResolver) (*Server, error) {
+	server, err := New(sessionDir, client, sessionID, agentName, accessMode, diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	server.credentials = newCredentialInjector(sessionDir, entries, resolve)
+	return server, nil
+}
+
 func (s *Server) SocketPath() string { return s.socketPath }
+
+func (s *Server) currentAccessMode() backend.HostedAccessMode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.accessMode
+}
+
+func (s *Server) refreshAccessMode(mode backend.HostedAccessMode) {
+	if mode == "" {
+		return
+	}
+	s.mu.Lock()
+	s.accessMode = mode
+	s.mu.Unlock()
+}
 
 func (s *Server) Start(ctx context.Context) error {
 	os.Remove(s.socketPath)
@@ -147,18 +179,20 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	result := defaultAllowResult()
+	result := s.evaluate(ctx, &req)
 	if err := WriteMessage(conn, result); err != nil {
 		s.diagnostic.Printf("sidecar write: %v\n", err)
 		return
 	}
 
-	go s.ingestEvent(ctx, &req)
+	if req.HookEvent != "PreToolUse" {
+		go s.ingestEvent(ctx, &req)
+	}
 }
 
 func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
-	if err := s.client.IngestEvent(ctx, hookEvent); err != nil {
+	if _, err := s.client.ProcessHookEvent(ctx, hookEvent); err != nil {
 		s.diagnostic.Printf("sidecar ingest: %v\n", err)
 	}
 }
@@ -185,11 +219,93 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 	}
 }
 
+func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateResult {
+	if req.HookEvent != "PreToolUse" {
+		return defaultAllowResult()
+	}
+
+	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
+	result, err := s.client.ProcessHookEvent(ctx, hookEvent)
+	if err != nil {
+		s.diagnostic.Printf("sidecar enforce: %v\n", err)
+		accessMode := s.currentAccessMode()
+		if accessMode != backend.HostedAccessModeEnforce {
+			return resultFromRuntime(hookruntime.Result{
+				Decision: hookruntime.DecisionAllow,
+				Reason:   "Kontext hosted access is not enforcing.",
+				Mode:     string(accessMode),
+			})
+		}
+		return EvaluateResult{
+			Type:     "result",
+			Decision: string(hookruntime.DecisionDeny),
+			Allowed:  false,
+			Reason:   "Kontext access policy could not be evaluated.",
+		}
+	}
+	s.refreshAccessMode(result.AccessMode)
+
+	resp := result.Response
+	switch resp.GetDecision() {
+	case agentv1.Decision_DECISION_ALLOW:
+		runtimeResult := hookruntime.Result{
+			Decision:   hookruntime.DecisionAllow,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(result.AccessMode),
+			Epoch:      result.PolicySetEpoch,
+		}
+		updatedInput, err := s.credentials.updatedInputForAllowedHook(ctx, req)
+		if err != nil {
+			s.diagnostic.Printf("sidecar credential injection skipped: %v\n", err)
+		}
+		runtimeResult.UpdatedInput = updatedInput
+		return resultFromRuntime(runtimeResult)
+	case agentv1.Decision_DECISION_ASK:
+		return resultFromRuntime(hookruntime.Result{
+			Decision:   hookruntime.DecisionAsk,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(result.AccessMode),
+			Epoch:      result.PolicySetEpoch,
+		})
+	case agentv1.Decision_DECISION_DENY:
+		fallthrough
+	default:
+		return resultFromRuntime(hookruntime.Result{
+			Decision:   hookruntime.DecisionDeny,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(result.AccessMode),
+			Epoch:      result.PolicySetEpoch,
+		})
+	}
+}
+
 func defaultAllowResult() EvaluateResult {
-	return EvaluateResult{Type: "result", Allowed: true}
+	return resultFromRuntime(hookruntime.Result{Decision: hookruntime.DecisionAllow})
+}
+
+func resultFromRuntime(result hookruntime.Result) EvaluateResult {
+	return EvaluateResult{
+		Type:         "result",
+		Decision:     string(result.Decision),
+		Allowed:      result.Allowed(),
+		Reason:       result.ClaudeReason(),
+		ReasonCode:   result.ReasonCode,
+		RequestID:    result.RequestID,
+		Mode:         result.Mode,
+		Epoch:        result.Epoch,
+		UpdatedInput: result.UpdatedInput,
+	}
 }
 
 func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {
+	enrichToolInputWithLocalContext(context.Background(), req)
+
 	hookEvent := &agentv1.ProcessHookEventRequest{
 		SessionId: sessionID,
 		Agent:     agentName,

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -14,8 +13,10 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/auth"
+	"github.com/kontext-security/kontext-cli/internal/backend"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/run"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 	"github.com/kontext-security/kontext-cli/internal/update"
@@ -92,7 +93,7 @@ func startCmd() *cobra.Command {
 			err := run.Start(ctx, run.Options{
 				Agent:        agentName,
 				TemplateFile: templateFile,
-				IssuerURL:    auth.DefaultIssuerURL,
+				IssuerURL:    backend.BaseURL(),
 				ClientID:     auth.DefaultClientID,
 				Verbose:      verbose,
 				Args:         args,
@@ -182,14 +183,15 @@ func hookCmd() *cobra.Command {
 
 			socketPath := os.Getenv("KONTEXT_SOCKET")
 			if socketPath == "" {
-				hook.Run(a, func(e *agent.HookEvent) (bool, string, error) {
-					return true, "no sidecar", nil
+				hook.Run(a, func(e *agent.HookEvent) (bool, string, map[string]any, error) {
+					return true, "no sidecar", nil, nil
 				})
 				return nil
 			}
 
-			hook.Run(a, func(e *agent.HookEvent) (bool, string, error) {
-				return evaluateViaSidecar(socketPath, agentName, e)
+			hook.Run(a, func(e *agent.HookEvent) (bool, string, map[string]any, error) {
+				result, err := evaluateViaSidecar(socketPath, hookruntime.EventFromAgent(agentName, e))
+				return result.Allowed(), result.ClaudeReason(), result.UpdatedInput, err
 			})
 			return nil
 		},
@@ -200,61 +202,66 @@ func hookCmd() *cobra.Command {
 	return cmd
 }
 
-func evaluateViaSidecar(socketPath, agentName string, e *agent.HookEvent) (bool, string, error) {
+func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime.Result, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
-		return true, "sidecar unreachable", nil
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar unreachable"}, nil
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return true, "sidecar deadline error", nil
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar deadline error"}, nil
 	}
 
 	req := sidecar.EvaluateRequest{
 		Type:           "evaluate",
-		Agent:          agentName,
-		HookEvent:      e.HookEventName,
-		ToolName:       e.ToolName,
-		ToolUseID:      e.ToolUseID,
-		CWD:            e.CWD,
-		PermissionMode: e.PermissionMode,
-		DurationMs:     e.DurationMs,
-		Error:          e.Error,
-		IsInterrupt:    e.IsInterrupt,
+		Agent:          event.Agent,
+		HookEvent:      event.HookEventName,
+		ToolName:       event.ToolName,
+		ToolUseID:      event.ToolUseID,
+		CWD:            event.CWD,
+		PermissionMode: event.PermissionMode,
+		DurationMs:     event.DurationMs,
+		Error:          event.Error,
+		IsInterrupt:    event.IsInterrupt,
 	}
 
-	if e.ToolInput != nil {
-		data, err := marshalJSON(e.ToolInput)
+	if event.ToolInput != nil {
+		data, err := hookruntime.MarshalMap(event.ToolInput)
 		if err != nil {
-			return true, "sidecar marshal error", nil
+			return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar marshal error"}, nil
 		}
 		req.ToolInput = data
 	}
-	if e.ToolResponse != nil {
-		data, err := marshalJSON(e.ToolResponse)
+	if event.ToolResponse != nil {
+		data, err := hookruntime.MarshalMap(event.ToolResponse)
 		if err != nil {
-			return true, "sidecar marshal error", nil
+			return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar marshal error"}, nil
 		}
 		req.ToolResponse = data
 	}
 
 	if err := sidecar.WriteMessage(conn, req); err != nil {
-		return true, "sidecar write error", nil
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar write error"}, nil
 	}
 
 	var result sidecar.EvaluateResult
 	if err := sidecar.ReadMessage(conn, &result); err != nil {
-		return true, "sidecar read error", nil
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar read error"}, nil
 	}
 
-	return result.Allowed, result.Reason, nil
-}
-
-func marshalJSON(v any) ([]byte, error) {
-	if v == nil {
-		return nil, nil
+	decision := hookruntime.Decision(result.Decision)
+	if decision == "" {
+		decision = hookruntime.ResultFromBool(result.Allowed, result.Reason).Decision
 	}
-	return json.Marshal(v)
+	return hookruntime.Result{
+		Decision:     decision,
+		Reason:       result.Reason,
+		ReasonCode:   result.ReasonCode,
+		RequestID:    result.RequestID,
+		Mode:         result.Mode,
+		Epoch:        result.Epoch,
+		UpdatedInput: result.UpdatedInput,
+	}, nil
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)
