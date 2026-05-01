@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/guard/app/hooks/claudecode"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
+	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
@@ -29,13 +29,6 @@ import (
 const (
 	defaultBaseURL   = "http://" + server.DefaultAddr
 	defaultModelPath = "models/guard/coding-agent-v0.json"
-)
-
-type hookMode string
-
-const (
-	hookModeObserve hookMode = "observe"
-	hookModeEnforce hookMode = "enforce"
 )
 
 // Run executes the Kontext command line.
@@ -163,112 +156,15 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	fs := flag.NewFlagSet("hook claude-code", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
-	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookModeObserve)), "hook mode: observe or enforce")
+	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookruntime.ModeObserve)), "hook mode: observe or enforce")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	hookMode, err := parseHookMode(*mode)
+	hookMode, err := hookruntime.ParseMode(*mode)
 	if err != nil {
 		return err
 	}
-	event, err := decodeClaudeHook(stdin)
-	if err != nil {
-		fmt.Fprintf(stderr, "kontext: malformed hook input: %v\n", err)
-		writeClaudeDecision(stdout, "PreToolUse", risk.DecisionDeny, "malformed hook input", hookMode)
-		return nil
-	}
-	client := claudecode.NewClient(*baseURL)
-	result, err := client.Process(ctx, event)
-	if err != nil {
-		if event.HookEventName == "PreToolUse" && hookMode == hookModeEnforce {
-			writeClaudeDecision(stdout, event.HookEventName, risk.DecisionDeny, "Kontext daemon unavailable", hookMode)
-			return nil
-		}
-		fmt.Fprintf(stderr, "kontext: async hook ingestion failed: %v\n", err)
-		writeClaudeDecision(stdout, event.HookEventName, risk.DecisionAllow, "telemetry allowed", hookMode)
-		return nil
-	}
-	decision := result.Decision
-	if decision != risk.DecisionAllow && decision != risk.DecisionAsk && decision != risk.DecisionDeny {
-		decision = risk.DecisionDeny
-	}
-	if event.HookEventName != "PreToolUse" {
-		decision = risk.DecisionAllow
-	}
-	writeClaudeDecision(stdout, event.HookEventName, decision, result.Reason, hookMode)
-	return nil
-}
-
-func parseHookMode(value string) (hookMode, error) {
-	switch hookMode(strings.ToLower(strings.TrimSpace(value))) {
-	case "", hookModeObserve:
-		return hookModeObserve, nil
-	case hookModeEnforce:
-		return hookModeEnforce, nil
-	default:
-		return "", fmt.Errorf("unknown hook mode %q; use observe or enforce", value)
-	}
-}
-
-func decodeClaudeHook(r io.Reader) (risk.HookEvent, error) {
-	var raw map[string]any
-	if err := json.NewDecoder(r).Decode(&raw); err != nil {
-		return risk.HookEvent{}, err
-	}
-	event := risk.HookEvent{
-		SessionID:     stringValue(raw, "session_id", "sessionId"),
-		Agent:         "claude-code",
-		HookEventName: stringValue(raw, "hook_event_name", "hookEventName"),
-		ToolName:      stringValue(raw, "tool_name", "toolName"),
-		ToolUseID:     stringValue(raw, "tool_use_id", "toolUseID", "toolUseId"),
-		CWD:           stringValue(raw, "cwd"),
-		Timestamp:     time.Now().UTC(),
-	}
-	if event.HookEventName == "" {
-		event.HookEventName = stringValue(raw, "hook_event")
-	}
-	if input, ok := raw["tool_input"].(map[string]any); ok {
-		event.ToolInput = input
-	} else if input, ok := raw["toolInput"].(map[string]any); ok {
-		event.ToolInput = input
-	}
-	if response, ok := raw["tool_response"].(map[string]any); ok {
-		event.ToolResponse = response
-	} else if response, ok := raw["toolResponse"].(map[string]any); ok {
-		event.ToolResponse = response
-	}
-	if event.HookEventName == "" {
-		return risk.HookEvent{}, errors.New("hook event name missing")
-	}
-	if event.SessionID == "" {
-		event.SessionID = "local"
-	}
-	return event, nil
-}
-
-func writeClaudeDecision(out io.Writer, hookEventName string, decision risk.Decision, reason string, mode hookMode) {
-	permissionDecision := "allow"
-	if mode == hookModeEnforce && (decision == risk.DecisionAsk || decision == risk.DecisionDeny) {
-		permissionDecision = "deny"
-	}
-	payload := map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":            hookEventName,
-			"permissionDecision":       permissionDecision,
-			"permissionDecisionReason": formatHookReason(decision, reason, mode),
-		},
-	}
-	_ = json.NewEncoder(out).Encode(payload)
-}
-
-func formatHookReason(decision risk.Decision, reason string, mode hookMode) string {
-	if reason == "" {
-		reason = "no reason provided"
-	}
-	if mode == hookModeObserve {
-		return fmt.Sprintf("Kontext observe mode: would %s; %s", decision, reason)
-	}
-	return reason
+	return hookruntime.Run(ctx, hookruntime.ClaudeAdapter{}, claudecode.NewClient(*baseURL), hookMode, stdin, stdout, stderr)
 }
 
 func runStatus(ctx context.Context, args []string, out io.Writer) error {
@@ -703,15 +599,6 @@ func runTrainFixtureModel(args []string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "wrote %s from %d events, %d sessions, %d states\n", *outputPath, len(events), len(sessions), len(model.States))
 	return nil
-}
-
-func stringValue(raw map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := raw[key].(string); ok {
-			return value
-		}
-	}
-	return ""
 }
 
 func envString(key, fallback string) string {
