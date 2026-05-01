@@ -1,13 +1,86 @@
 package sidecar
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
+
+func newTestLogger(buf *bytes.Buffer) diagnostic.Logger {
+	return diagnostic.New(buf, true)
+}
+
+func TestHeartbeatDeduplication(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := newTestLogger(&buf)
+	state := newHeartbeatState()
+	now := time.Unix(100, 0)
+
+	state.record(now, errors.New("connection refused"), logger.Printf)
+	state.record(now.Add(time.Second), errors.New("connection refused"), logger.Printf)
+	state.record(now.Add(5*time.Second), nil, logger.Printf)
+
+	output := buf.String()
+	errCount := strings.Count(output, "sidecar heartbeat:")
+	recoveryCount := strings.Count(output, "heartbeat recovered")
+	if errCount != 1 {
+		t.Fatalf("expected 1 deduplicated error log, got %d:\n%s", errCount, output)
+	}
+	if recoveryCount != 1 {
+		t.Fatalf("expected 1 recovery log, got %d:\n%s", recoveryCount, output)
+	}
+}
+
+func TestHeartbeatDifferentErrorsBothLogged(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := newTestLogger(&buf)
+	state := newHeartbeatState()
+	now := time.Unix(100, 0)
+
+	state.record(now, errors.New("error A"), logger.Printf)
+	state.record(now.Add(time.Second), errors.New("error B"), logger.Printf)
+
+	output := buf.String()
+	errCount := strings.Count(output, "sidecar heartbeat:")
+	if errCount != 2 {
+		t.Fatalf("expected 2 error logs for different errors, got %d:\n%s", errCount, output)
+	}
+}
+
+func TestHeartbeatBackoffIntervalCalculation(t *testing.T) {
+	t.Parallel()
+
+	state := newHeartbeatState()
+	now := time.Unix(100, 0)
+	want := []time.Duration{
+		60 * time.Second,
+		120 * time.Second,
+		240 * time.Second,
+		heartbeatMaxInterval,
+		heartbeatMaxInterval,
+	}
+	for i, interval := range want {
+		state.record(now.Add(time.Duration(i)*time.Second), errors.New("offline"), func(string, ...any) {})
+		if got := state.nextInterval(); got != interval {
+			t.Fatalf("after failure %d: interval = %v, want %v", i+1, got, interval)
+		}
+	}
+	state.record(now.Add(10*time.Second), nil, func(string, ...any) {})
+	if got := state.nextInterval(); got != heartbeatMinInterval {
+		t.Fatalf("after success: interval = %v, want %v", got, heartbeatMinInterval)
+	}
+}
 
 func TestAcceptLoopReturnsOnListenerError(t *testing.T) {
 	t.Parallel()
