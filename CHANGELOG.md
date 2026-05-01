@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/kontext-security/kontext-cli/compare/v0.5.0...v0.5.1) (2026-05-01)
+
+
+### Bug Fixes
+
+* add exponential backoff to sidecar heartbeat loop ([#88](https://github.com/kontext-security/kontext-cli/issues/88)) ([b166c9d](https://github.com/kontext-security/kontext-cli/commit/b166c9d4251c493f8408de6657f96d14321252dd))
+
 ## [0.5.0](https://github.com/kontext-security/kontext-cli/compare/v0.4.0...v0.5.0) (2026-05-01)
 
 
