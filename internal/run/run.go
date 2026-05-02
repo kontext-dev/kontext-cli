@@ -176,12 +176,20 @@ func Start(ctx context.Context, opts Options) error {
 		)
 	}
 
+	// Resolve startup credentials only when hosted access is not enforcing.
+	// In enforce mode, managed credential material must not enter the agent
+	// environment before the PreToolUse policy decision allows the action.
 	var resolved []credential.Resolved
-	if len(templateDoc.Entries) > 0 {
+	if shouldResolveStartupCredentials(bootstrapResult.AccessMode) && len(templateDoc.Entries) > 0 {
 		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics, fetchConnectURLForConnectFlow)
 		if err != nil {
 			return err
 		}
+	} else if len(templateDoc.Entries) > 0 {
+		fmt.Fprintf(
+			os.Stderr,
+			"ℹ Managed provider credentials are policy-gated for this hosted session; placeholders will not be preloaded.\n",
+		)
 	}
 
 	// 6. Start sidecar
@@ -192,13 +200,17 @@ func Start(ctx context.Context, opts Options) error {
 		return fmt.Errorf("create session dir: %w", err)
 	}
 
-	sc, err := sidecar.New(
+	sc, err := sidecar.NewWithCredentials(
 		sessionDir,
 		client,
 		sessionID,
 		opts.Agent,
 		bootstrapResult.AccessMode,
 		diagnostics,
+		templateDoc.Entries,
+		func(ctx context.Context, entry credential.Entry) (string, error) {
+			return tokenManager.ExchangeCredential(ctx, entry, credentialClientID)
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("sidecar: %w", err)
@@ -874,6 +886,10 @@ func buildEnv(templateDoc *credential.TemplateFile, resolved []credential.Resolv
 		}
 	}
 	return credential.BuildEnv(resolved, env)
+}
+
+func shouldResolveStartupCredentials(mode backend.HostedAccessMode) bool {
+	return mode != backend.HostedAccessModeEnforce
 }
 
 func managedProvidersFromBootstrap(items []*agentv1.ManagedProvider) []credential.ManagedProvider {

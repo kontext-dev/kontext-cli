@@ -15,6 +15,7 @@ import (
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/backend"
+	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
@@ -192,6 +193,143 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 	}
 }
 
+func TestEnrichToolInputRemovesUntrustedKontextContext(t *testing.T) {
+	t.Parallel()
+
+	req := &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		CWD:       t.TempDir(),
+		ToolInput: json.RawMessage(`{"command":"git push origin main","kontext":{"git":{"branch":"main","remotes":{"origin":"https://github.com/evil/repo.git"}}}}`),
+	}
+
+	enrichToolInputWithLocalContext(context.Background(), req)
+
+	var input map[string]any
+	if err := json.Unmarshal(req.ToolInput, &input); err != nil {
+		t.Fatalf("tool input JSON: %v", err)
+	}
+	if _, ok := input["kontext"]; ok {
+		t.Fatalf("kontext context = %#v, want removed when local git context is unavailable", input["kontext"])
+	}
+	if input["command"] != "git push origin main" {
+		t.Fatalf("command = %#v, want original command", input["command"])
+	}
+}
+
+func TestEvaluatePreToolUseInjectsManagedCredentialOnlyAfterAllow(t *testing.T) {
+	t.Parallel()
+
+	client := &stubProcessor{
+		result: &backend.ProcessHookEventResult{
+			Response: &agentv1.ProcessHookEventResponse{
+				Decision: agentv1.Decision_DECISION_ALLOW,
+				Reason:   "allowed",
+			},
+			AccessMode: backend.HostedAccessModeEnforce,
+		},
+	}
+	sessionDir := t.TempDir()
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     client,
+		diagnostic: diagnostic.New(io.Discard, false),
+		credentials: newCredentialInjector(
+			sessionDir,
+			[]credential.Entry{{EnvVar: "GITHUB_TOKEN", Provider: "github"}},
+			func(context.Context, credential.Entry) (string, error) { return "managed-token", nil },
+		),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh pr view 92","description":"inspect pr"}`),
+	})
+
+	if !result.Allowed {
+		t.Fatal("evaluate().Allowed = false, want true")
+	}
+	command, ok := result.UpdatedInput["command"].(string)
+	if !ok {
+		t.Fatalf("updated command missing: %#v", result.UpdatedInput)
+	}
+	if strings.Contains(command, "managed-token") {
+		t.Fatalf("updated command leaked raw token: %q", command)
+	}
+	if !strings.Contains(command, `GITHUB_TOKEN="$(cat `) || !strings.Contains(command, "gh pr view 92") {
+		t.Fatalf("updated command = %q, want credential file prefix and original command", command)
+	}
+	if got := result.UpdatedInput["description"]; got != "inspect pr" {
+		t.Fatalf("updated input did not preserve unchanged fields: %#v", result.UpdatedInput)
+	}
+	raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", "GITHUB_TOKEN"))
+	if err != nil {
+		t.Fatalf("credential file missing: %v", err)
+	}
+	if string(raw) != "managed-token" {
+		t.Fatalf("credential file = %q, want managed-token", raw)
+	}
+}
+
+func TestEvaluatePreToolUseInjectsAllMatchingManagedCredentials(t *testing.T) {
+	t.Parallel()
+
+	client := &stubProcessor{
+		result: &backend.ProcessHookEventResult{
+			Response: &agentv1.ProcessHookEventResponse{
+				Decision: agentv1.Decision_DECISION_ALLOW,
+			},
+			AccessMode: backend.HostedAccessModeEnforce,
+		},
+	}
+	sessionDir := t.TempDir()
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     client,
+		diagnostic: diagnostic.New(io.Discard, false),
+		credentials: newCredentialInjector(
+			sessionDir,
+			[]credential.Entry{
+				{EnvVar: "GITHUB_TOKEN", Provider: "github"},
+				{EnvVar: "GIT_ASKPASS_TOKEN", Provider: "github"},
+			},
+			func(_ context.Context, entry credential.Entry) (string, error) {
+				return "managed-" + entry.EnvVar, nil
+			},
+		),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
+	})
+
+	command, ok := result.UpdatedInput["command"].(string)
+	if !ok {
+		t.Fatalf("updated command missing: %#v", result.UpdatedInput)
+	}
+	for _, envVar := range []string{"GITHUB_TOKEN", "GIT_ASKPASS_TOKEN"} {
+		if !strings.Contains(command, envVar+`="$(cat `) {
+			t.Fatalf("updated command = %q, want %s export", command, envVar)
+		}
+		raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", envVar))
+		if err != nil {
+			t.Fatalf("%s credential file missing: %v", envVar, err)
+		}
+		if string(raw) != "managed-"+envVar {
+			t.Fatalf("%s credential file = %q", envVar, raw)
+		}
+	}
+}
+
 func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -242,6 +380,193 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	}
 	if strings.Count(string(claudeOutput), "Request ID: request-123") != 1 {
 		t.Fatalf("claude output = %s, want one request id", claudeOutput)
+	}
+}
+
+func TestEvaluatePreToolUseSanitizesCredentialFileName(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
+		accessMode: backend.HostedAccessModeEnforce,
+		client: &stubProcessor{
+			result: &backend.ProcessHookEventResult{
+				Response: &agentv1.ProcessHookEventResponse{
+					Decision: agentv1.Decision_DECISION_ALLOW,
+				},
+				AccessMode: backend.HostedAccessModeEnforce,
+			},
+		},
+		diagnostic: diagnostic.New(io.Discard, false),
+		credentials: newCredentialInjector(
+			sessionDir,
+			[]credential.Entry{{EnvVar: "../../escaped", Provider: "github"}},
+			func(context.Context, credential.Entry) (string, error) { return "managed-token", nil },
+		),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
+	})
+
+	if !result.Allowed {
+		t.Fatal("evaluate().Allowed = false, want true")
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "escaped")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("escaped credential path stat error = %v, want not exist", err)
+	}
+	fallbackName := shellQuoteAssignmentName("../../escaped")
+	if fallbackName == "KONTEXT_MANAGED_TOKEN" {
+		t.Fatal("fallback credential name is not collision-resistant")
+	}
+	raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", fallbackName))
+	if err != nil {
+		t.Fatalf("sanitized credential file missing: %v", err)
+	}
+	if string(raw) != "managed-token" {
+		t.Fatalf("credential file = %q, want managed-token", raw)
+	}
+	command, ok := result.UpdatedInput["command"].(string)
+	if !ok || !strings.Contains(command, fallbackName+`="$(cat `) {
+		t.Fatalf("updated command = %#v, want sanitized env assignment", result.UpdatedInput["command"])
+	}
+}
+
+func TestEvaluatePreToolUseKeepsDistinctSanitizedCredentialNames(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
+		accessMode: backend.HostedAccessModeEnforce,
+		client: &stubProcessor{
+			result: &backend.ProcessHookEventResult{
+				Response: &agentv1.ProcessHookEventResponse{
+					Decision: agentv1.Decision_DECISION_ALLOW,
+				},
+				AccessMode: backend.HostedAccessModeEnforce,
+			},
+		},
+		diagnostic: diagnostic.New(io.Discard, false),
+		credentials: newCredentialInjector(
+			sessionDir,
+			[]credential.Entry{
+				{EnvVar: "../../first", Provider: "github"},
+				{EnvVar: "../../second", Provider: "github"},
+			},
+			func(_ context.Context, entry credential.Entry) (string, error) {
+				return "managed-" + entry.EnvVar, nil
+			},
+		),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
+	})
+
+	command, ok := result.UpdatedInput["command"].(string)
+	if !ok {
+		t.Fatalf("updated command missing: %#v", result.UpdatedInput)
+	}
+	for _, envVar := range []string{"../../first", "../../second"} {
+		name := shellQuoteAssignmentName(envVar)
+		if !strings.Contains(command, name+`="$(cat `) {
+			t.Fatalf("updated command = %q, want %s export", command, name)
+		}
+		raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", name))
+		if err != nil {
+			t.Fatalf("%s credential file missing: %v", name, err)
+		}
+		if string(raw) != "managed-"+envVar {
+			t.Fatalf("%s credential file = %q", name, raw)
+		}
+	}
+	if shellQuoteAssignmentName("../../first") == shellQuoteAssignmentName("../../second") {
+		t.Fatal("sanitized credential names collided")
+	}
+}
+
+func TestEvaluatePreToolUseDoesNotInjectManagedCredentialForAskOrDeny(t *testing.T) {
+	t.Parallel()
+
+	for _, decision := range []agentv1.Decision{
+		agentv1.Decision_DECISION_ASK,
+		agentv1.Decision_DECISION_DENY,
+	} {
+		t.Run(decision.String(), func(t *testing.T) {
+			t.Parallel()
+			called := false
+			s := &Server{
+				sessionID:  "session-123",
+				agentName:  "claude",
+				accessMode: backend.HostedAccessModeEnforce,
+				client: &stubProcessor{
+					result: &backend.ProcessHookEventResult{
+						Response: &agentv1.ProcessHookEventResponse{
+							Decision: decision,
+							Reason:   "blocked",
+						},
+						AccessMode: backend.HostedAccessModeEnforce,
+					},
+				},
+				diagnostic: diagnostic.New(io.Discard, false),
+				credentials: newCredentialInjector(
+					t.TempDir(),
+					[]credential.Entry{{EnvVar: "GITHUB_TOKEN", Provider: "github"}},
+					func(context.Context, credential.Entry) (string, error) {
+						called = true
+						return "managed-token", nil
+					},
+				),
+			}
+
+			result := s.evaluate(context.Background(), &EvaluateRequest{
+				HookEvent: "PreToolUse",
+				ToolName:  "Bash",
+				ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
+			})
+
+			if result.Allowed {
+				t.Fatal("evaluate().Allowed = true, want false")
+			}
+			if result.UpdatedInput != nil {
+				t.Fatalf("UpdatedInput = %#v, want nil", result.UpdatedInput)
+			}
+			if called {
+				t.Fatal("credential resolver was called for non-ALLOW decision")
+			}
+		})
+	}
+}
+
+func TestLooksLikeProviderCommandDoesNotFallbackToSubstringMatching(t *testing.T) {
+	t.Parallel()
+
+	if looksLikeProviderCommand("echo notionally safe", "notion") {
+		t.Fatal("looksLikeProviderCommand matched unsupported provider substring")
+	}
+}
+
+func TestLooksLikeGitHubCommandRequiresGitHubEvidence(t *testing.T) {
+	t.Parallel()
+
+	if looksLikeProviderCommand("git push origin main", "github") {
+		t.Fatal("looksLikeProviderCommand matched generic git command without GitHub target")
+	}
+	if !looksLikeProviderCommand("git push https://github.com/example/repo.git main", "github") {
+		t.Fatal("looksLikeProviderCommand did not match explicit GitHub git target")
+	}
+	if !looksLikeProviderCommand("gh pr view 92", "github") {
+		t.Fatal("looksLikeProviderCommand did not match gh command")
 	}
 }
 
@@ -427,7 +752,7 @@ func TestBuildHookEventRequestPreservesTelemetryPayload(t *testing.T) {
 		IsInterrupt:    &isInterrupt,
 	}
 
-	got := buildHookEventRequest("session-123", "claude", req)
+	got := buildHookEventRequest(context.Background(), "session-123", "claude", req)
 	if got.SessionId != "session-123" ||
 		got.Agent != "claude" ||
 		got.HookEvent != req.HookEvent ||
@@ -460,7 +785,7 @@ func TestBuildHookEventRequestPreservesExplicitFalseInterrupt(t *testing.T) {
 	t.Parallel()
 
 	isInterrupt := false
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
+	got := buildHookEventRequest(context.Background(), "session-123", "claude", &EvaluateRequest{
 		HookEvent:   "PostToolUseFailure",
 		ToolName:    "Bash",
 		ToolUseID:   "toolu_123",
@@ -479,7 +804,7 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	t.Parallel()
 
 	durationMs := int64(0)
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
+	got := buildHookEventRequest(context.Background(), "session-123", "claude", &EvaluateRequest{
 		HookEvent:  "PostToolUse",
 		ToolName:   "Bash",
 		ToolUseID:  "toolu_123",
@@ -491,6 +816,36 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	}
 	if got.GetDurationMs() != 0 {
 		t.Fatalf("DurationMs = %d, want 0", got.GetDurationMs())
+	}
+}
+
+func TestParseGitRemotesSanitizesGitHubURLs(t *testing.T) {
+	t.Parallel()
+
+	remotes := parseGitRemotes(strings.Join([]string{
+		"origin\thttps://token@github.com/acme/repo.git (fetch)",
+		"origin\thttps://token@github.com/acme/repo.git (push)",
+		"upstream\tgit@github.com:other/repo.git (fetch)",
+		"ignored\thttps://example.com/acme/repo.git (fetch)",
+	}, "\n"))
+
+	if got := remotes["origin"]; got != "https://github.com/acme/repo.git" {
+		t.Fatalf("origin remote = %q, want sanitized GitHub URL", got)
+	}
+	if got := remotes["upstream"]; got != "https://github.com/other/repo.git" {
+		t.Fatalf("upstream remote = %q, want normalized SSH GitHub URL", got)
+	}
+	if _, ok := remotes["ignored"]; ok {
+		t.Fatal("non-GitHub remote was included")
+	}
+}
+
+func TestSanitizeGitRemoteDropsCredentialsQueryAndFragment(t *testing.T) {
+	t.Parallel()
+
+	got := sanitizeGitRemote("https://user:secret@github.com/acme/repo.git?token=secret#frag")
+	if got != "https://github.com/acme/repo.git" {
+		t.Fatalf("sanitizeGitRemote() = %q, want credential-free URL", got)
 	}
 }
 
