@@ -15,8 +15,8 @@ import (
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/backend"
-	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 func newTestLogger(buf *bytes.Buffer) diagnostic.Logger {
@@ -123,6 +123,33 @@ func TestDefaultAllowResultOmitsPlaceholderReason(t *testing.T) {
 	}
 }
 
+func TestIngestEventRefreshesAccessMode(t *testing.T) {
+	t.Parallel()
+
+	modePath := filepath.Join(t.TempDir(), "access-mode")
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		modePath:   modePath,
+		accessMode: backend.HostedAccessModeNoPolicy,
+		client:     &stubProcessor{result: &backend.ProcessHookEventResult{AccessMode: backend.HostedAccessModeEnforce}},
+		diagnostic: diagnostic.New(io.Discard, false),
+	}
+
+	s.ingestEvent(context.Background(), &EvaluateRequest{HookEvent: "PostToolUse"})
+
+	if got := s.currentAccessMode(); got != backend.HostedAccessModeEnforce {
+		t.Fatalf("currentAccessMode() = %q, want enforce", got)
+	}
+	data, err := os.ReadFile(modePath)
+	if err != nil {
+		t.Fatalf("access mode file: %v", err)
+	}
+	if string(data) != string(backend.HostedAccessModeEnforce) {
+		t.Fatalf("access mode file = %q, want enforce", data)
+	}
+}
+
 func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +168,7 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 	s := &Server{
 		sessionID: "session-123",
 		agentName: "claude",
+		modePath:  filepath.Join(t.TempDir(), "access-mode"),
 		client:    client,
 	}
 
@@ -164,162 +192,56 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 	}
 }
 
-func TestEvaluatePreToolUseInjectsManagedCredentialOnlyAfterAllow(t *testing.T) {
+func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	t.Parallel()
 
-	client := &stubProcessor{
-		result: &backend.ProcessHookEventResult{
-			Response: &agentv1.ProcessHookEventResponse{
-				Decision: agentv1.Decision_DECISION_ALLOW,
-				Reason:   "allowed",
-			},
-			AccessMode: backend.HostedAccessModeEnforce,
-		},
-	}
-	sessionDir := t.TempDir()
 	s := &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
-		accessMode: backend.HostedAccessModeEnforce,
-		client:     client,
-		diagnostic: diagnostic.New(io.Discard, false),
-		credentials: newCredentialInjector(
-			sessionDir,
-			[]credential.Entry{{EnvVar: "GITHUB_TOKEN", Provider: "github"}},
-			func(context.Context, credential.Entry) (string, error) { return "managed-token", nil },
-		),
-	}
-
-	result := s.evaluate(context.Background(), &EvaluateRequest{
-		HookEvent: "PreToolUse",
-		ToolName:  "Bash",
-		ToolInput: json.RawMessage(`{"command":"gh pr view 92","description":"inspect pr"}`),
-	})
-
-	if !result.Allowed {
-		t.Fatal("evaluate().Allowed = false, want true")
-	}
-	command, ok := result.UpdatedInput["command"].(string)
-	if !ok {
-		t.Fatalf("updated command missing: %#v", result.UpdatedInput)
-	}
-	if strings.Contains(command, "managed-token") {
-		t.Fatalf("updated command leaked raw token: %q", command)
-	}
-	if !strings.Contains(command, `GITHUB_TOKEN="$(cat `) || !strings.Contains(command, "gh pr view 92") {
-		t.Fatalf("updated command = %q, want credential file prefix and original command", command)
-	}
-	if got := result.UpdatedInput["description"]; got != "inspect pr" {
-		t.Fatalf("updated input did not preserve unchanged fields: %#v", result.UpdatedInput)
-	}
-	raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", "GITHUB_TOKEN"))
-	if err != nil {
-		t.Fatalf("credential file missing: %v", err)
-	}
-	if string(raw) != "managed-token" {
-		t.Fatalf("credential file = %q, want managed-token", raw)
-	}
-}
-
-func TestEvaluatePreToolUseSanitizesCredentialFileName(t *testing.T) {
-	t.Parallel()
-
-	sessionDir := t.TempDir()
-	s := &Server{
-		sessionID:  "session-123",
-		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeEnforce,
 		client: &stubProcessor{
 			result: &backend.ProcessHookEventResult{
 				Response: &agentv1.ProcessHookEventResponse{
-					Decision: agentv1.Decision_DECISION_ALLOW,
+					Decision: agentv1.Decision_DECISION_ASK,
+					Reason:   "approval required",
 				},
+				RequestID:  "request-123",
 				AccessMode: backend.HostedAccessModeEnforce,
 			},
 		},
 		diagnostic: diagnostic.New(io.Discard, false),
-		credentials: newCredentialInjector(
-			sessionDir,
-			[]credential.Entry{{EnvVar: "../../escaped", Provider: "github"}},
-			func(context.Context, credential.Entry) (string, error) { return "managed-token", nil },
-		),
 	}
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
-		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
+		ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
 	})
 
-	if !result.Allowed {
-		t.Fatal("evaluate().Allowed = false, want true")
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
 	}
-	if _, err := os.Stat(filepath.Join(sessionDir, "escaped")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("escaped credential path stat error = %v, want not exist", err)
+	if result.Reason != "approval required" {
+		t.Fatalf("evaluate().Reason = %q, want raw backend reason", result.Reason)
 	}
-	raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", "KONTEXT_MANAGED_TOKEN"))
+	if result.RequestID != "request-123" {
+		t.Fatalf("evaluate().RequestID = %q, want request-123", result.RequestID)
+	}
+
+	claudeOutput, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
+		Decision:  hookruntime.Decision(result.Decision),
+		Reason:    result.Reason,
+		RequestID: result.RequestID,
+	})
 	if err != nil {
-		t.Fatalf("sanitized credential file missing: %v", err)
+		t.Fatalf("EncodeClaudeResult() error = %v", err)
 	}
-	if string(raw) != "managed-token" {
-		t.Fatalf("credential file = %q, want managed-token", raw)
+	if !strings.Contains(string(claudeOutput), `"permissionDecision":"deny"`) {
+		t.Fatalf("claude output = %s, want deny", claudeOutput)
 	}
-	command, ok := result.UpdatedInput["command"].(string)
-	if !ok || !strings.Contains(command, `KONTEXT_MANAGED_TOKEN="$(cat `) {
-		t.Fatalf("updated command = %#v, want sanitized env assignment", result.UpdatedInput["command"])
-	}
-}
-
-func TestEvaluatePreToolUseDoesNotInjectManagedCredentialForAskOrDeny(t *testing.T) {
-	t.Parallel()
-
-	for _, decision := range []agentv1.Decision{
-		agentv1.Decision_DECISION_ASK,
-		agentv1.Decision_DECISION_DENY,
-	} {
-		t.Run(decision.String(), func(t *testing.T) {
-			t.Parallel()
-			called := false
-			s := &Server{
-				sessionID:  "session-123",
-				agentName:  "claude",
-				accessMode: backend.HostedAccessModeEnforce,
-				client: &stubProcessor{
-					result: &backend.ProcessHookEventResult{
-						Response: &agentv1.ProcessHookEventResponse{
-							Decision: decision,
-							Reason:   "blocked",
-						},
-						AccessMode: backend.HostedAccessModeEnforce,
-					},
-				},
-				diagnostic: diagnostic.New(io.Discard, false),
-				credentials: newCredentialInjector(
-					t.TempDir(),
-					[]credential.Entry{{EnvVar: "GITHUB_TOKEN", Provider: "github"}},
-					func(context.Context, credential.Entry) (string, error) {
-						called = true
-						return "managed-token", nil
-					},
-				),
-			}
-
-			result := s.evaluate(context.Background(), &EvaluateRequest{
-				HookEvent: "PreToolUse",
-				ToolName:  "Bash",
-				ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
-			})
-
-			if result.Allowed {
-				t.Fatal("evaluate().Allowed = true, want false")
-			}
-			if result.UpdatedInput != nil {
-				t.Fatalf("UpdatedInput = %#v, want nil", result.UpdatedInput)
-			}
-			if called {
-				t.Fatal("credential resolver was called for non-ALLOW decision")
-			}
-		})
+	if strings.Count(string(claudeOutput), "Request ID: request-123") != 1 {
+		t.Fatalf("claude output = %s, want one request id", claudeOutput)
 	}
 }
 
@@ -341,6 +263,44 @@ func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	}
 	if result.Reason == "" {
 		t.Fatal("evaluate().Reason = empty, want failure reason")
+	}
+}
+
+func TestEvaluatePreToolUseFailsClosedWhenEnforceModeCannotPersist(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := filepath.Join(t.TempDir(), "missing")
+	s, err := New(
+		sessionDir,
+		&stubProcessor{
+			result: &backend.ProcessHookEventResult{
+				Response: &agentv1.ProcessHookEventResponse{
+					Decision: agentv1.Decision_DECISION_ALLOW,
+					Reason:   "allowed",
+				},
+				AccessMode: backend.HostedAccessModeEnforce,
+			},
+		},
+		"session-123",
+		"claude",
+		backend.HostedAccessModeNoPolicy,
+		diagnostic.New(io.Discard, false),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
+	})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if result.Mode != string(backend.HostedAccessModeEnforce) {
+		t.Fatalf("evaluate().Mode = %q, want enforce", result.Mode)
 	}
 }
 
@@ -379,6 +339,7 @@ func TestEvaluateRefreshesAccessModeForLaterFailures(t *testing.T) {
 	s := &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     client,
 		diagnostic: diagnostic.New(io.Discard, false),
@@ -410,6 +371,7 @@ func TestEvaluateRefreshesAccessModeBackToFailOpen(t *testing.T) {
 	s := &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeEnforce,
 		client:     client,
 		diagnostic: diagnostic.New(io.Discard, false),
@@ -529,36 +491,6 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	}
 	if got.GetDurationMs() != 0 {
 		t.Fatalf("DurationMs = %d, want 0", got.GetDurationMs())
-	}
-}
-
-func TestParseGitRemotesSanitizesGitHubURLs(t *testing.T) {
-	t.Parallel()
-
-	remotes := parseGitRemotes(strings.Join([]string{
-		"origin\thttps://token@github.com/acme/repo.git (fetch)",
-		"origin\thttps://token@github.com/acme/repo.git (push)",
-		"upstream\tgit@github.com:other/repo.git (fetch)",
-		"ignored\thttps://example.com/acme/repo.git (fetch)",
-	}, "\n"))
-
-	if got := remotes["origin"]; got != "https://github.com/acme/repo.git" {
-		t.Fatalf("origin remote = %q, want sanitized GitHub URL", got)
-	}
-	if got := remotes["upstream"]; got != "https://github.com/other/repo.git" {
-		t.Fatalf("upstream remote = %q, want normalized SSH GitHub URL", got)
-	}
-	if _, ok := remotes["ignored"]; ok {
-		t.Fatal("non-GitHub remote was included")
-	}
-}
-
-func TestSanitizeGitRemoteDropsCredentialsQueryAndFragment(t *testing.T) {
-	t.Parallel()
-
-	got := sanitizeGitRemote("https://user:secret@github.com/acme/repo.git?token=secret#frag")
-	if got != "https://github.com/acme/repo.git" {
-		t.Fatalf("sanitizeGitRemote() = %q, want credential-free URL", got)
 	}
 }
 

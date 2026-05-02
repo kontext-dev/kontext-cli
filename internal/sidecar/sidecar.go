@@ -10,7 +10,6 @@ import (
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/backend"
-	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
@@ -70,17 +69,16 @@ func (h *heartbeatState) record(now time.Time, err error, logf func(string, ...a
 }
 
 type Server struct {
-	socketPath  string
-	modePath    string
-	listener    net.Listener
-	sessionID   string
-	agentName   string
-	mu          sync.RWMutex
-	accessMode  backend.HostedAccessMode
-	client      sidecarClient
-	diagnostic  diagnostic.Logger
-	cancel      context.CancelFunc
-	credentials *credentialInjector
+	socketPath string
+	modePath   string
+	listener   net.Listener
+	sessionID  string
+	agentName  string
+	mu         sync.RWMutex
+	accessMode backend.HostedAccessMode
+	client     sidecarClient
+	diagnostic diagnostic.Logger
+	cancel     context.CancelFunc
 }
 
 // New creates a new sidecar server.
@@ -96,15 +94,6 @@ func New(sessionDir string, client sidecarClient, sessionID, agentName string, a
 	}, nil
 }
 
-func NewWithCredentials(sessionDir string, client sidecarClient, sessionID, agentName string, accessMode backend.HostedAccessMode, diagnostics diagnostic.Logger, entries []credential.Entry, resolve credentialResolver) (*Server, error) {
-	server, err := New(sessionDir, client, sessionID, agentName, accessMode, diagnostics)
-	if err != nil {
-		return nil, err
-	}
-	server.credentials = newCredentialInjector(sessionDir, entries, resolve)
-	return server, nil
-}
-
 func (s *Server) SocketPath() string { return s.socketPath }
 
 func (s *Server) AccessModePath() string { return s.modePath }
@@ -115,19 +104,24 @@ func (s *Server) currentAccessMode() backend.HostedAccessMode {
 	return s.accessMode
 }
 
-func (s *Server) refreshAccessMode(mode backend.HostedAccessMode) {
+func (s *Server) refreshAccessMode(mode backend.HostedAccessMode) error {
 	if mode == "" {
-		return
+		return nil
+	}
+	if err := os.WriteFile(s.modePath, []byte(mode), 0o600); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	s.accessMode = mode
 	s.mu.Unlock()
-	_ = os.WriteFile(s.modePath, []byte(mode), 0o600)
+	return nil
 }
 
 func (s *Server) Start(ctx context.Context) error {
 	os.Remove(s.socketPath)
-	_ = os.WriteFile(s.modePath, []byte(s.currentAccessMode()), 0o600)
+	if err := os.WriteFile(s.modePath, []byte(s.currentAccessMode()), 0o600); err != nil {
+		return err
+	}
 
 	ln, err := net.Listen("unix", s.socketPath)
 	if err != nil {
@@ -198,8 +192,13 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
-	if _, err := s.client.ProcessHookEvent(ctx, hookEvent); err != nil {
+	result, err := s.client.ProcessHookEvent(ctx, hookEvent)
+	if err != nil {
 		s.diagnostic.Printf("sidecar ingest: %v\n", err)
+		return
+	}
+	if err := s.refreshAccessMode(result.AccessMode); err != nil {
+		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
 	}
 }
 
@@ -249,7 +248,18 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			Reason:   "Kontext access policy could not be evaluated.",
 		}
 	}
-	s.refreshAccessMode(result.AccessMode)
+	if err := s.refreshAccessMode(result.AccessMode); err != nil {
+		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
+		if result.AccessMode == backend.HostedAccessModeEnforce {
+			return EvaluateResult{
+				Type:     "result",
+				Decision: string(hookruntime.DecisionDeny),
+				Allowed:  false,
+				Reason:   "Kontext access policy mode could not be persisted.",
+				Mode:     string(result.AccessMode),
+			}
+		}
+	}
 
 	resp := result.Response
 	switch resp.GetDecision() {
@@ -262,11 +272,6 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			Mode:       string(result.AccessMode),
 			Epoch:      result.PolicySetEpoch,
 		}
-		updatedInput, err := s.credentials.updatedInputForAllowedHook(ctx, req)
-		if err != nil {
-			s.diagnostic.Printf("sidecar credential injection skipped: %v\n", err)
-		}
-		runtimeResult.UpdatedInput = updatedInput
 		return resultFromRuntime(runtimeResult)
 	case agentv1.Decision_DECISION_ASK:
 		return resultFromRuntime(hookruntime.Result{
@@ -300,7 +305,7 @@ func resultFromRuntime(result hookruntime.Result) EvaluateResult {
 		Type:         "result",
 		Decision:     string(result.Decision),
 		Allowed:      result.Allowed(),
-		Reason:       result.ClaudeReason(),
+		Reason:       result.Reason,
 		ReasonCode:   result.ReasonCode,
 		RequestID:    result.RequestID,
 		Mode:         result.Mode,
@@ -310,8 +315,6 @@ func resultFromRuntime(result hookruntime.Result) EvaluateResult {
 }
 
 func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {
-	enrichToolInputWithLocalContext(context.Background(), req)
-
 	hookEvent := &agentv1.ProcessHookEventRequest{
 		SessionId: sessionID,
 		Agent:     agentName,

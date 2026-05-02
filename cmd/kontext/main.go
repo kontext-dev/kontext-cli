@@ -14,7 +14,6 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/auth"
-	"github.com/kontext-security/kontext-cli/internal/backend"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
@@ -94,7 +93,7 @@ func startCmd() *cobra.Command {
 			err := run.Start(ctx, run.Options{
 				Agent:        agentName,
 				TemplateFile: templateFile,
-				IssuerURL:    backend.BaseURL(),
+				IssuerURL:    auth.DefaultIssuerURL,
 				ClientID:     auth.DefaultClientID,
 				Verbose:      verbose,
 				Args:         args,
