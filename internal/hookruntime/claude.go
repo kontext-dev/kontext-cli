@@ -82,7 +82,10 @@ func firstMap(values ...map[string]any) map[string]any {
 
 func EncodeClaudeResult(hookEventName string, result Result) ([]byte, error) {
 	permissionDecision := "allow"
-	if result.Decision == DecisionAsk || result.Decision == DecisionDeny {
+	if result.Decision == DecisionAsk {
+		permissionDecision = "ask"
+	}
+	if result.Decision == DecisionDeny {
 		permissionDecision = "deny"
 	}
 	reason := result.ClaudeReason()

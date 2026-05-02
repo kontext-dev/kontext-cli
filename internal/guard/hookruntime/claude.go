@@ -50,7 +50,7 @@ func (ClaudeAdapter) Encode(out io.Writer, result Result) error {
 	if result.Mode == ModeEnforce && result.CanBlock {
 		switch result.Decision {
 		case risk.DecisionAsk:
-			decision = sharedhook.DecisionAsk
+			decision = sharedhook.DecisionDeny
 		case risk.DecisionDeny:
 			decision = sharedhook.DecisionDeny
 		}

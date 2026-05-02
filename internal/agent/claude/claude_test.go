@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 func TestDecodeHookInputPreservesOptionalMetadata(t *testing.T) {
@@ -181,6 +182,24 @@ func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "suppressOutput") {
 		t.Fatalf("EncodeAllow() = %s, want suppressOutput", out)
+	}
+}
+
+func TestEncodeClaudeResultPreservesAskDecision(t *testing.T) {
+	t.Parallel()
+
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
+		Decision: hookruntime.DecisionAsk,
+		Reason:   "approval required",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"permissionDecision":"ask"`) {
+		t.Fatalf("output = %s", string(out))
+	}
+	if !strings.Contains(string(out), `"permissionDecisionReason":"approval required"`) {
+		t.Fatalf("output = %s", string(out))
 	}
 }
 
