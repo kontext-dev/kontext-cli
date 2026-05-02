@@ -3,6 +3,7 @@ package hookruntime
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
 )
@@ -79,6 +80,9 @@ func (r Result) ClaudeReason() string {
 	reason := r.Reason
 	if r.Decision == DecisionAsk && r.RequestID != "" {
 		if reason != "" {
+			if containsRequestID(reason) {
+				return reason
+			}
 			return fmt.Sprintf("%s Request ID: %s", reason, r.RequestID)
 		}
 		return fmt.Sprintf("Kontext access policy requires approval. Request ID: %s", r.RequestID)
@@ -90,6 +94,10 @@ func (r Result) ClaudeReason() string {
 		return "Blocked by Kontext access policy."
 	}
 	return reason
+}
+
+func containsRequestID(reason string) bool {
+	return strings.Contains(strings.ToLower(reason), "request id")
 }
 
 func MarshalMap(value map[string]any) (json.RawMessage, error) {

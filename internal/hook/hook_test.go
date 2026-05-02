@@ -73,7 +73,7 @@ func TestRunAllowsAndWritesOutput(t *testing.T) {
 	}
 }
 
-func TestRunPreservesAskReason(t *testing.T) {
+func TestRunMapsAskToBlockingDenyWithRequestID(t *testing.T) {
 	t.Parallel()
 
 	stdout := &bytes.Buffer{}
@@ -91,11 +91,14 @@ func TestRunPreservesAskReason(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("run() exit code = %d, want 2", code)
 	}
-	if got := stdout.String(); got != "DENY" {
-		t.Fatalf("stdout = %q, want DENY", got)
+	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
+		t.Fatalf("stdout = %q, want deny decision", stdout.String())
 	}
-	if !strings.Contains(stub.denyReason, "Request ID: req-123") {
-		t.Fatalf("deny reason = %q, want request id", stub.denyReason)
+	if !strings.Contains(stdout.String(), "Request ID: req-123") {
+		t.Fatalf("stdout = %q, want request id", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Request ID: req-123") {
+		t.Fatalf("stderr = %q, want request id", stderr.String())
 	}
 }
 
