@@ -221,6 +221,55 @@ func TestEvaluatePreToolUseInjectsManagedCredentialOnlyAfterAllow(t *testing.T) 
 	}
 }
 
+func TestEvaluatePreToolUseSanitizesCredentialFileName(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		accessMode: backend.HostedAccessModeEnforce,
+		client: &stubProcessor{
+			result: &backend.ProcessHookEventResult{
+				Response: &agentv1.ProcessHookEventResponse{
+					Decision: agentv1.Decision_DECISION_ALLOW,
+				},
+				AccessMode: backend.HostedAccessModeEnforce,
+			},
+		},
+		diagnostic: diagnostic.New(io.Discard, false),
+		credentials: newCredentialInjector(
+			sessionDir,
+			[]credential.Entry{{EnvVar: "../../escaped", Provider: "github"}},
+			func(context.Context, credential.Entry) (string, error) { return "managed-token", nil },
+		),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
+	})
+
+	if !result.Allowed {
+		t.Fatal("evaluate().Allowed = false, want true")
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "escaped")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("escaped credential path stat error = %v, want not exist", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(sessionDir, "credentials", "KONTEXT_MANAGED_TOKEN"))
+	if err != nil {
+		t.Fatalf("sanitized credential file missing: %v", err)
+	}
+	if string(raw) != "managed-token" {
+		t.Fatalf("credential file = %q, want managed-token", raw)
+	}
+	command, ok := result.UpdatedInput["command"].(string)
+	if !ok || !strings.Contains(command, `KONTEXT_MANAGED_TOKEN="$(cat `) {
+		t.Fatalf("updated command = %#v, want sanitized env assignment", result.UpdatedInput["command"])
+	}
+}
+
 func TestEvaluatePreToolUseDoesNotInjectManagedCredentialForAskOrDeny(t *testing.T) {
 	t.Parallel()
 

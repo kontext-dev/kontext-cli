@@ -71,7 +71,8 @@ func Start(ctx context.Context, opts Options) error {
 	}
 
 	// 2. Backend client — token source refreshes automatically on expiry
-	client := backend.NewClient(backend.BaseURL(), newSessionTokenSource(ctx, session, diagnostics))
+	tokenManager := newSessionTokenManager(ctx, session, diagnostics)
+	client := backend.NewClient(backend.BaseURL(), tokenManager.Token)
 
 	// 3. Create session via ConnectRPC
 	hostname, _ := os.Hostname()
@@ -208,7 +209,7 @@ func Start(ctx context.Context, opts Options) error {
 		diagnostics,
 		templateDoc.Entries,
 		func(ctx context.Context, entry credential.Entry) (string, error) {
-			return exchangeCredential(ctx, session, entry, credentialClientID)
+			return tokenManager.ExchangeCredential(ctx, entry, credentialClientID)
 		},
 	)
 	if err != nil {
@@ -923,37 +924,51 @@ func supportedAgents() []string {
 	return names
 }
 
-// newSessionTokenSource returns a TokenSource that transparently refreshes
+type sessionTokenManager struct {
+	ctx         context.Context
+	session     *auth.Session
+	diagnostics diagnostic.Logger
+	mu          sync.Mutex
+}
+
+func newSessionTokenManager(ctx context.Context, session *auth.Session, diagnostics diagnostic.Logger) *sessionTokenManager {
+	return &sessionTokenManager{ctx: ctx, session: session, diagnostics: diagnostics}
+}
+
+// Token returns a TokenSource-compatible function that transparently refreshes
 // the OIDC access token when it expires, so long-running sessions keep working.
 // If forceRefresh is true, the token is refreshed unconditionally (used by
 // the transport layer after receiving a 401 from the server).
-func newSessionTokenSource(ctx context.Context, session *auth.Session, diagnostics diagnostic.Logger) backend.TokenSource {
-	mu := &sync.Mutex{}
-	return func(forceRefresh bool) (string, error) {
-		mu.Lock()
-		defer mu.Unlock()
+func (m *sessionTokenManager) Token(forceRefresh bool) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-		if !shouldRefreshSession(session, forceRefresh, time.Now()) {
-			return session.AccessToken, nil
-		}
-
-		refreshed, err := auth.RefreshSession(ctx, session)
-		if err != nil {
-			return "", fmt.Errorf("token refresh failed: %w", err)
-		}
-
-		fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
-
-		// Persist so other processes (and the next `kontext start`) see the new token
-		if saveErr := auth.SaveSession(refreshed); saveErr != nil {
-			diagnostics.Printf("persist refreshed session failed: %v\n", saveErr)
-			fmt.Fprintln(os.Stderr, "⚠ Could not persist refreshed session.")
-		}
-
-		// Update the shared session pointer for subsequent calls
-		*session = *refreshed
-		return session.AccessToken, nil
+	if !shouldRefreshSession(m.session, forceRefresh, time.Now()) {
+		return m.session.AccessToken, nil
 	}
+
+	refreshed, err := auth.RefreshSession(m.ctx, m.session)
+	if err != nil {
+		return "", fmt.Errorf("token refresh failed: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
+
+	// Persist so other processes (and the next `kontext start`) see the new token
+	if saveErr := auth.SaveSession(refreshed); saveErr != nil {
+		m.diagnostics.Printf("persist refreshed session failed: %v\n", saveErr)
+		fmt.Fprintln(os.Stderr, "⚠ Could not persist refreshed session.")
+	}
+
+	// Update the shared session pointer for subsequent calls
+	*m.session = *refreshed
+	return m.session.AccessToken, nil
+}
+
+func (m *sessionTokenManager) ExchangeCredential(ctx context.Context, entry credential.Entry, clientID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return exchangeCredential(ctx, m.session, entry, clientID)
 }
 
 func shouldRefreshSession(session *auth.Session, forceRefresh bool, now time.Time) bool {

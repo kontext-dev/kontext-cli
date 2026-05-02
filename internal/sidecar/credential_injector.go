@@ -80,7 +80,7 @@ func (i *credentialInjector) writeCredentialFile(envVar, value string) (string, 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create credential dir: %w", err)
 	}
-	path := filepath.Join(dir, envVar)
+	path := filepath.Join(dir, safeCredentialFileName(envVar))
 	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 		return "", fmt.Errorf("write credential file: %w", err)
 	}
@@ -101,6 +101,10 @@ func shellQuoteAssignmentName(value string) string {
 		return value
 	}
 	return "KONTEXT_MANAGED_TOKEN"
+}
+
+func safeCredentialFileName(envVar string) string {
+	return shellQuoteAssignmentName(envVar)
 }
 
 func shellQuote(value string) string {
