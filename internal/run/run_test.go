@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/auth"
-	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
@@ -993,30 +992,6 @@ func TestBuildEnvTreatsCommentOnlyRightHandSideAsEmpty(t *testing.T) {
 	}
 	if strings.Contains(joined, "OPENAI_API_KEY=# set later") {
 		t.Fatalf("buildEnv() preserved comment-only value: %q", joined)
-	}
-}
-
-func TestShouldResolveStartupCredentials(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		mode backend.HostedAccessMode
-		want bool
-	}{
-		{name: "disabled", mode: backend.HostedAccessModeDisabled, want: true},
-		{name: "no policy", mode: backend.HostedAccessModeNoPolicy, want: true},
-		{name: "enforce", mode: backend.HostedAccessModeEnforce, want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := shouldResolveStartupCredentials(tt.mode); got != tt.want {
-				t.Fatalf("shouldResolveStartupCredentials(%q) = %v, want %v", tt.mode, got, tt.want)
-			}
-		})
 	}
 }
 
