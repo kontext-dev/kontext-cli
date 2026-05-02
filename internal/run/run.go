@@ -111,13 +111,17 @@ func Start(ctx context.Context, opts Options) error {
 	// dashboard relies on this state to skip generic onboarding, so a failure
 	// here must abort — a half-set-up session would leave the org looking
 	// un-onboarded while the CLI appears to work.
-	bootstrapResp, err := client.BootstrapCli(ctx, &agentv1.BootstrapCliRequest{
+	bootstrapResult, err := client.BootstrapCli(ctx, &agentv1.BootstrapCliRequest{
 		AgentId: createResp.AgentId,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap cli application: %w", err)
 	}
-	fmt.Fprintln(os.Stderr, "✓ Kontext CLI bootstrap complete")
+	bootstrapResp := bootstrapResult.Response
+	if bootstrapResult.AccessMode == backend.HostedAccessModeEnforce && bootstrapResult.PolicySetEpoch == "" {
+		return errors.New("bootstrap cli application: enforce mode missing policy epoch")
+	}
+	fmt.Fprintf(os.Stderr, "✓ Kontext CLI bootstrap complete (%s)\n", bootstrapResult.AccessMode)
 
 	syncResult, err := credential.EnsureManagedTemplate(
 		opts.TemplateFile,
@@ -171,14 +175,20 @@ func Start(ctx context.Context, opts Options) error {
 		)
 	}
 
-	// 5. Resolve credentials (before sidecar starts — no background goroutines yet,
-	//    so reading session fields is safe without synchronization)
+	// 5. Resolve startup credentials only when hosted access is not enforcing.
+	// In enforce mode, managed credential material must not enter the agent
+	// environment before the PreToolUse policy decision allows the action.
 	var resolved []credential.Resolved
-	if len(templateDoc.Entries) > 0 {
+	if shouldResolveStartupCredentials(bootstrapResult.AccessMode) && len(templateDoc.Entries) > 0 {
 		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics, fetchConnectURLForConnectFlow)
 		if err != nil {
 			return err
 		}
+	} else if len(templateDoc.Entries) > 0 {
+		fmt.Fprintf(
+			os.Stderr,
+			"ℹ Managed provider credentials are policy-gated for this hosted session; placeholders will not be preloaded.\n",
+		)
 	}
 
 	// 6. Start sidecar
@@ -189,7 +199,18 @@ func Start(ctx context.Context, opts Options) error {
 		return fmt.Errorf("create session dir: %w", err)
 	}
 
-	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent, diagnostics)
+	sc, err := sidecar.NewWithCredentials(
+		sessionDir,
+		client,
+		sessionID,
+		opts.Agent,
+		bootstrapResult.AccessMode,
+		diagnostics,
+		templateDoc.Entries,
+		func(ctx context.Context, entry credential.Entry) (string, error) {
+			return exchangeCredential(ctx, session, entry, credentialClientID)
+		},
+	)
 	if err != nil {
 		return fmt.Errorf("sidecar: %w", err)
 	}
@@ -204,11 +225,18 @@ func Start(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("generate settings: %w", err)
 	}
+	if bootstrapResult.AccessMode == backend.HostedAccessModeEnforce {
+		if err := VerifyBlockingHookSettings(settingsPath, kontextBin, opts.Agent); err != nil {
+			return fmt.Errorf("verify enforce hook settings: %w", err)
+		}
+	}
 
 	// 8. Build env
 	env := buildEnv(templateDoc, resolved)
 	env = append(env, "KONTEXT_SOCKET="+sc.SocketPath())
 	env = append(env, "KONTEXT_SESSION_ID="+sessionID)
+	env = append(env, "KONTEXT_ACCESS_MODE="+string(bootstrapResult.AccessMode))
+	env = append(env, "KONTEXT_ACCESS_MODE_PATH="+sc.AccessModePath())
 
 	// 9. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
@@ -857,6 +885,10 @@ func buildEnv(templateDoc *credential.TemplateFile, resolved []credential.Resolv
 		}
 	}
 	return credential.BuildEnv(resolved, env)
+}
+
+func shouldResolveStartupCredentials(mode backend.HostedAccessMode) bool {
+	return mode != backend.HostedAccessModeEnforce
 }
 
 func managedProvidersFromBootstrap(items []*agentv1.ManagedProvider) []credential.ManagedProvider {

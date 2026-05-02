@@ -6,8 +6,8 @@ managed:
       value: github.com/kontext-security/kontext-cli/gen
 inputs:
   - git_repo: https://github.com/kontext-security/proto.git
-    branch: main
-    ref: a9da139386c97cb653497ea08ae84fe27dffc850
+    branch: feat/hosted-access-response-metadata
+    ref: 10b65e8a783e3462596d233254bb43cc4bc7b862
 plugins:
   - local: protoc-gen-go
     out: gen

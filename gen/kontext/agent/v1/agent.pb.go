@@ -206,12 +206,16 @@ func (x *ProcessHookEventRequest) GetIsInterrupt() bool {
 }
 
 type ProcessHookEventResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Decision      Decision               `protobuf:"varint,1,opt,name=decision,proto3,enum=kontext.agent.v1.Decision" json:"decision,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
-	EventId       string                 `protobuf:"bytes,3,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Decision       Decision               `protobuf:"varint,1,opt,name=decision,proto3,enum=kontext.agent.v1.Decision" json:"decision,omitempty"`
+	Reason         string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	EventId        string                 `protobuf:"bytes,3,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	ReasonCode     string                 `protobuf:"bytes,4,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"`
+	RequestId      string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	AccessMode     string                 `protobuf:"bytes,6,opt,name=access_mode,json=accessMode,proto3" json:"access_mode,omitempty"`
+	PolicySetEpoch string                 `protobuf:"bytes,7,opt,name=policy_set_epoch,json=policySetEpoch,proto3" json:"policy_set_epoch,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ProcessHookEventResponse) Reset() {
@@ -261,6 +265,34 @@ func (x *ProcessHookEventResponse) GetReason() string {
 func (x *ProcessHookEventResponse) GetEventId() string {
 	if x != nil {
 		return x.EventId
+	}
+	return ""
+}
+
+func (x *ProcessHookEventResponse) GetReasonCode() string {
+	if x != nil {
+		return x.ReasonCode
+	}
+	return ""
+}
+
+func (x *ProcessHookEventResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ProcessHookEventResponse) GetAccessMode() string {
+	if x != nil {
+		return x.AccessMode
+	}
+	return ""
+}
+
+func (x *ProcessHookEventResponse) GetPolicySetEpoch() string {
+	if x != nil {
+		return x.PolicySetEpoch
 	}
 	return ""
 }
@@ -457,6 +489,8 @@ type BootstrapCliResponse struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ApplicationId    string                 `protobuf:"bytes,1,opt,name=application_id,json=applicationId,proto3" json:"application_id,omitempty"`
 	ManagedProviders []*ManagedProvider     `protobuf:"bytes,2,rep,name=managed_providers,json=managedProviders,proto3" json:"managed_providers,omitempty"`
+	AccessMode       string                 `protobuf:"bytes,3,opt,name=access_mode,json=accessMode,proto3" json:"access_mode,omitempty"`
+	PolicySetEpoch   string                 `protobuf:"bytes,4,opt,name=policy_set_epoch,json=policySetEpoch,proto3" json:"policy_set_epoch,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -503,6 +537,20 @@ func (x *BootstrapCliResponse) GetManagedProviders() []*ManagedProvider {
 		return x.ManagedProviders
 	}
 	return nil
+}
+
+func (x *BootstrapCliResponse) GetAccessMode() string {
+	if x != nil {
+		return x.AccessMode
+	}
+	return ""
+}
+
+func (x *BootstrapCliResponse) GetPolicySetEpoch() string {
+	if x != nil {
+		return x.PolicySetEpoch
+	}
+	return ""
 }
 
 type ManagedProvider struct {
@@ -767,11 +815,18 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\x10_permission_modeB\x0e\n" +
 	"\f_duration_msB\b\n" +
 	"\x06_errorB\x0f\n" +
-	"\r_is_interrupt\"\x85\x01\n" +
+	"\r_is_interrupt\"\x90\x02\n" +
 	"\x18ProcessHookEventResponse\x126\n" +
 	"\bdecision\x18\x01 \x01(\x0e2\x1a.kontext.agent.v1.DecisionR\bdecision\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
-	"\bevent_id\x18\x03 \x01(\tR\aeventId\"\x8b\x02\n" +
+	"\bevent_id\x18\x03 \x01(\tR\aeventId\x12\x1f\n" +
+	"\vreason_code\x18\x04 \x01(\tR\n" +
+	"reasonCode\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\x12\x1f\n" +
+	"\vaccess_mode\x18\x06 \x01(\tR\n" +
+	"accessMode\x12(\n" +
+	"\x10policy_set_epoch\x18\a \x01(\tR\x0epolicySetEpoch\"\x8b\x02\n" +
 	"\x14CreateSessionRequest\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05agent\x18\x02 \x01(\tR\x05agent\x12\x1a\n" +
@@ -789,10 +844,13 @@ const file_kontext_agent_v1_agent_proto_rawDesc = "" +
 	"\x0forganization_id\x18\x03 \x01(\tR\x0eorganizationId\x12\x19\n" +
 	"\bagent_id\x18\x04 \x01(\tR\aagentId\"0\n" +
 	"\x13BootstrapCliRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x8d\x01\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xd8\x01\n" +
 	"\x14BootstrapCliResponse\x12%\n" +
 	"\x0eapplication_id\x18\x01 \x01(\tR\rapplicationId\x12N\n" +
-	"\x11managed_providers\x18\x02 \x03(\v2!.kontext.agent.v1.ManagedProviderR\x10managedProviders\"\xae\x01\n" +
+	"\x11managed_providers\x18\x02 \x03(\v2!.kontext.agent.v1.ManagedProviderR\x10managedProviders\x12\x1f\n" +
+	"\vaccess_mode\x18\x03 \x01(\tR\n" +
+	"accessMode\x12(\n" +
+	"\x10policy_set_epoch\x18\x04 \x01(\tR\x0epolicySetEpoch\"\xae\x01\n" +
 	"\x0fManagedProvider\x12\x1d\n" +
 	"\n" +
 	"preset_key\x18\x01 \x01(\tR\tpresetKey\x12\x16\n" +

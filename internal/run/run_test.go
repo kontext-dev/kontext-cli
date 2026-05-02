@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/auth"
+	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 )
@@ -995,6 +996,30 @@ func TestBuildEnvTreatsCommentOnlyRightHandSideAsEmpty(t *testing.T) {
 	}
 }
 
+func TestShouldResolveStartupCredentials(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode backend.HostedAccessMode
+		want bool
+	}{
+		{name: "disabled", mode: backend.HostedAccessModeDisabled, want: true},
+		{name: "no policy", mode: backend.HostedAccessModeNoPolicy, want: true},
+		{name: "enforce", mode: backend.HostedAccessModeEnforce, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := shouldResolveStartupCredentials(tt.mode); got != tt.want {
+				t.Fatalf("shouldResolveStartupCredentials(%q) = %v, want %v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
 type recordingSessionEnder struct {
 	sessionID string
 	calls     int
@@ -1118,5 +1143,36 @@ func TestGenerateSettingsWritesClaudeHooks(t *testing.T) {
 		if hook.Timeout != 10 {
 			t.Fatalf("%s hook timeout = %d, want 10", event, hook.Timeout)
 		}
+	}
+}
+
+func TestVerifyBlockingHookSettingsRequiresPreToolUseCommand(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	settingsPath, err := GenerateSettings(sessionDir, "/usr/local/bin/kontext", "claude")
+	if err != nil {
+		t.Fatalf("GenerateSettings() error = %v", err)
+	}
+	if err := VerifyBlockingHookSettings(settingsPath, "/usr/local/bin/kontext", "claude"); err != nil {
+		t.Fatalf("VerifyBlockingHookSettings() error = %v", err)
+	}
+
+	settings := claudeSettings{
+		Hooks: map[string][]hookGroup{
+			"PostToolUse": commandHookGroups("/usr/local/bin/kontext hook --agent claude"),
+		},
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	brokenPath := filepath.Join(sessionDir, "broken-settings.json")
+	if err := os.WriteFile(brokenPath, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := VerifyBlockingHookSettings(brokenPath, "/usr/local/bin/kontext", "claude"); err == nil {
+		t.Fatal("VerifyBlockingHookSettings() error = nil, want missing PreToolUse hook error")
 	}
 }
