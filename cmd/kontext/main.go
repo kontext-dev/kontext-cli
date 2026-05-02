@@ -16,6 +16,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/run"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 	"github.com/kontext-security/kontext-cli/internal/update"
@@ -182,14 +183,15 @@ func hookCmd() *cobra.Command {
 
 			socketPath := os.Getenv("KONTEXT_SOCKET")
 			if socketPath == "" {
-				hook.Run(a, func(e *agent.HookEvent) (bool, string, error) {
-					return true, "no sidecar", nil
+				hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
+					return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "no sidecar"}, nil
 				})
 				return nil
 			}
 
-			hook.Run(a, func(e *agent.HookEvent) (bool, string, error) {
-				return evaluateViaSidecar(socketPath, agentName, e)
+			hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
+				allowed, reason, err := evaluateViaSidecar(socketPath, agentName, e)
+				return hookruntime.ResultFromBool(allowed, reason), err
 			})
 			return nil
 		},

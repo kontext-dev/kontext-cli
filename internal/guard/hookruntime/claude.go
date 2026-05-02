@@ -1,43 +1,36 @@
 package hookruntime
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	sharedhook "github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 type ClaudeAdapter struct{}
 
 func (ClaudeAdapter) Decode(r io.Reader) (Event, error) {
-	var raw map[string]any
-	if err := json.NewDecoder(r).Decode(&raw); err != nil {
+	input, err := io.ReadAll(r)
+	if err != nil {
+		return Event{}, err
+	}
+	sharedEvent, err := sharedhook.DecodeClaudeEvent(input, "claude-code")
+	if err != nil {
 		return Event{}, err
 	}
 	event := risk.HookEvent{
-		SessionID:     stringValue(raw, "session_id", "sessionId"),
-		Agent:         "claude-code",
-		HookEventName: stringValue(raw, "hook_event_name", "hookEventName"),
-		ToolName:      stringValue(raw, "tool_name", "toolName"),
-		ToolUseID:     stringValue(raw, "tool_use_id", "toolUseID", "toolUseId"),
-		CWD:           stringValue(raw, "cwd"),
+		SessionID:     sharedEvent.SessionID,
+		Agent:         sharedEvent.Agent,
+		HookEventName: sharedEvent.HookEventName,
+		ToolName:      sharedEvent.ToolName,
+		ToolInput:     sharedEvent.ToolInput,
+		ToolResponse:  sharedEvent.ToolResponse,
+		ToolUseID:     sharedEvent.ToolUseID,
+		CWD:           sharedEvent.CWD,
 		Timestamp:     time.Now().UTC(),
-	}
-	if event.HookEventName == "" {
-		event.HookEventName = stringValue(raw, "hook_event")
-	}
-	if input, ok := raw["tool_input"].(map[string]any); ok {
-		event.ToolInput = input
-	} else if input, ok := raw["toolInput"].(map[string]any); ok {
-		event.ToolInput = input
-	}
-	if response, ok := raw["tool_response"].(map[string]any); ok {
-		event.ToolResponse = response
-	} else if response, ok := raw["toolResponse"].(map[string]any); ok {
-		event.ToolResponse = response
 	}
 	if event.HookEventName == "" {
 		return Event{}, errors.New("hook event name missing")
@@ -53,18 +46,24 @@ func (ClaudeAdapter) Decode(r io.Reader) (Event, error) {
 }
 
 func (ClaudeAdapter) Encode(out io.Writer, result Result) error {
-	permissionDecision := "allow"
-	if result.Mode == ModeEnforce && result.CanBlock && (result.Decision == risk.DecisionAsk || result.Decision == risk.DecisionDeny) {
-		permissionDecision = "deny"
+	decision := sharedhook.DecisionAllow
+	if result.Mode == ModeEnforce && result.CanBlock {
+		switch result.Decision {
+		case risk.DecisionAsk:
+			decision = sharedhook.DecisionAsk
+		case risk.DecisionDeny:
+			decision = sharedhook.DecisionDeny
+		}
 	}
-	payload := map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":            result.HookName,
-			"permissionDecision":       permissionDecision,
-			"permissionDecisionReason": formatReason(result.Decision, result.Reason, result.Mode),
-		},
+	payload, err := sharedhook.EncodeClaudeResult(result.HookName, sharedhook.Result{
+		Decision: decision,
+		Reason:   formatReason(result.Decision, result.Reason, result.Mode),
+	})
+	if err != nil {
+		return err
 	}
-	return json.NewEncoder(out).Encode(payload)
+	_, err = out.Write(append(payload, '\n'))
+	return err
 }
 
 func (ClaudeAdapter) MalformedHookName() string {
@@ -79,15 +78,6 @@ func formatReason(decision risk.Decision, reason string, mode Mode) string {
 		return fmt.Sprintf("Kontext observe mode: would %s; %s", decision, reason)
 	}
 	return reason
-}
-
-func stringValue(raw map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := raw[key].(string); ok {
-			return value
-		}
-	}
-	return ""
 }
 
 var _ Adapter = ClaudeAdapter{}
