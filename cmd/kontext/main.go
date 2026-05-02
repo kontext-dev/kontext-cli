@@ -183,15 +183,14 @@ func hookCmd() *cobra.Command {
 
 			socketPath := os.Getenv("KONTEXT_SOCKET")
 			if socketPath == "" {
-				hook.Run(a, func(e *agent.HookEvent) (bool, string, map[string]any, error) {
-					return true, "no sidecar", nil, nil
+				hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
+					return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "no sidecar"}, nil
 				})
 				return nil
 			}
 
-			hook.Run(a, func(e *agent.HookEvent) (bool, string, map[string]any, error) {
-				result, err := evaluateViaSidecar(socketPath, hookruntime.EventFromAgent(agentName, e))
-				return result.Allowed(), result.ClaudeReason(), result.UpdatedInput, err
+			hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
+				return evaluateViaSidecar(socketPath, hookruntime.EventFromAgent(agentName, e))
 			})
 			return nil
 		},
@@ -205,11 +204,11 @@ func hookCmd() *cobra.Command {
 func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime.Result, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
-		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar unreachable"}, nil
+		return sidecarFailureResult(event, "sidecar unreachable"), nil
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar deadline error"}, nil
+		return sidecarFailureResult(event, "sidecar deadline error"), nil
 	}
 
 	req := sidecar.EvaluateRequest{
@@ -228,25 +227,25 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 	if event.ToolInput != nil {
 		data, err := hookruntime.MarshalMap(event.ToolInput)
 		if err != nil {
-			return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar marshal error"}, nil
+			return sidecarFailureResult(event, "sidecar marshal error"), nil
 		}
 		req.ToolInput = data
 	}
 	if event.ToolResponse != nil {
 		data, err := hookruntime.MarshalMap(event.ToolResponse)
 		if err != nil {
-			return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar marshal error"}, nil
+			return sidecarFailureResult(event, "sidecar marshal error"), nil
 		}
 		req.ToolResponse = data
 	}
 
 	if err := sidecar.WriteMessage(conn, req); err != nil {
-		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar write error"}, nil
+		return sidecarFailureResult(event, "sidecar write error"), nil
 	}
 
 	var result sidecar.EvaluateResult
 	if err := sidecar.ReadMessage(conn, &result); err != nil {
-		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "sidecar read error"}, nil
+		return sidecarFailureResult(event, "sidecar read error"), nil
 	}
 
 	decision := hookruntime.Decision(result.Decision)
@@ -262,6 +261,13 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 		Epoch:        result.Epoch,
 		UpdatedInput: result.UpdatedInput,
 	}, nil
+}
+
+func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Result {
+	if event.HookEventName == "PreToolUse" && os.Getenv("KONTEXT_ACCESS_MODE") == "enforce" {
+		return hookruntime.Result{Decision: hookruntime.DecisionDeny, Reason: reason, Mode: "enforce"}
+	}
+	return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)

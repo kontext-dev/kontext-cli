@@ -235,6 +235,7 @@ func Start(ctx context.Context, opts Options) error {
 	env := buildEnv(templateDoc, resolved)
 	env = append(env, "KONTEXT_SOCKET="+sc.SocketPath())
 	env = append(env, "KONTEXT_SESSION_ID="+sessionID)
+	env = append(env, "KONTEXT_ACCESS_MODE="+string(bootstrapResult.AccessMode))
 
 	// 9. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)

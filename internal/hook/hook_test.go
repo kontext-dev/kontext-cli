@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 type stubAgent struct {
@@ -15,6 +16,7 @@ type stubAgent struct {
 	allowErr          error
 	denyErr           error
 	allowUpdatedInput map[string]any
+	denyReason        string
 }
 
 func (s *stubAgent) Name() string { return "stub" }
@@ -38,6 +40,7 @@ func (s *stubAgent) EncodeDeny(event *agent.HookEvent, reason string) ([]byte, e
 	if s.denyErr != nil {
 		return nil, s.denyErr
 	}
+	s.denyReason = reason
 	return []byte("DENY"), nil
 }
 
@@ -49,11 +52,11 @@ func TestRunAllowsAndWritesOutput(t *testing.T) {
 
 	stub := &stubAgent{}
 	updatedInput := map[string]any{"command": "echo ok"}
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, stub, func(event *agent.HookEvent) (bool, string, map[string]any, error) {
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, stub, func(event *agent.HookEvent) (hookruntime.Result, error) {
 		if event.HookEventName != "PreToolUse" {
 			t.Fatalf("event.HookEventName = %q, want %q", event.HookEventName, "PreToolUse")
 		}
-		return true, "ok", updatedInput, nil
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "ok", UpdatedInput: updatedInput}, nil
 	})
 
 	if code != 0 {
@@ -70,20 +73,46 @@ func TestRunAllowsAndWritesOutput(t *testing.T) {
 	}
 }
 
+func TestRunPreservesAskReason(t *testing.T) {
+	t.Parallel()
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	stub := &stubAgent{}
+
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, stub, func(*agent.HookEvent) (hookruntime.Result, error) {
+		return hookruntime.Result{
+			Decision:  hookruntime.DecisionAsk,
+			Reason:    "approval required",
+			RequestID: "req-123",
+		}, nil
+	})
+
+	if code != 2 {
+		t.Fatalf("run() exit code = %d, want 2", code)
+	}
+	if got := stdout.String(); got != "DENY" {
+		t.Fatalf("stdout = %q, want DENY", got)
+	}
+	if !strings.Contains(stub.denyReason, "Request ID: req-123") {
+		t.Fatalf("deny reason = %q, want request id", stub.denyReason)
+	}
+}
+
 func TestRunReturnsErrorWhenAllowEncodingFails(t *testing.T) {
 	t.Parallel()
 
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{allowErr: errors.New("encode failed")}, func(*agent.HookEvent) (bool, string, map[string]any, error) {
-		return true, "ok", nil, nil
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{allowErr: errors.New("encode failed")}, func(*agent.HookEvent) (hookruntime.Result, error) {
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "ok"}, nil
 	})
 
 	if code != 2 {
 		t.Fatalf("run() exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "failed to encode allow output") {
+	if !strings.Contains(stderr.String(), "failed to encode hook output") {
 		t.Fatalf("stderr = %q, want encode failure", stderr.String())
 	}
 	if got := stdout.String(); got != "" {
@@ -96,8 +125,8 @@ func TestRunReturnsErrorWhenWriteFails(t *testing.T) {
 
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), errWriter{}, stderr, &stubAgent{}, func(*agent.HookEvent) (bool, string, map[string]any, error) {
-		return true, "ok", nil, nil
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), errWriter{}, stderr, &stubAgent{}, func(*agent.HookEvent) (hookruntime.Result, error) {
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "ok"}, nil
 	})
 
 	if code != 2 {
@@ -114,14 +143,14 @@ func TestRunReturnsErrorWhenDenyEncodingFails(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 
-	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{denyErr: errors.New("encode failed")}, func(*agent.HookEvent) (bool, string, map[string]any, error) {
-		return false, "blocked", nil, nil
+	code := run(strings.NewReader(`{"hook_event_name":"PreToolUse"}`), stdout, stderr, &stubAgent{denyErr: errors.New("encode failed")}, func(*agent.HookEvent) (hookruntime.Result, error) {
+		return hookruntime.Result{Decision: hookruntime.DecisionDeny, Reason: "blocked"}, nil
 	})
 
 	if code != 2 {
 		t.Fatalf("run() exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "failed to encode deny output") {
+	if !strings.Contains(stderr.String(), "failed to encode hook output") {
 		t.Fatalf("stderr = %q, want encode failure", stderr.String())
 	}
 }
