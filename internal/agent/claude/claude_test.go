@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 func TestDecodeHookInputPreservesOptionalMetadata(t *testing.T) {
@@ -74,6 +75,34 @@ func TestDecodeHookInputPreservesExplicitFalseInterrupt(t *testing.T) {
 	}
 }
 
+func TestDecodeHookInputPreservesLegacyAliases(t *testing.T) {
+	t.Parallel()
+
+	event, err := (&Claude{}).DecodeHookInput([]byte(`{"sessionId":"s1","hookEventName":"PreToolUse","toolName":"Read","toolInput":{"file_path":"README.md"},"toolUseID":"toolu_123"}`))
+	if err != nil {
+		t.Fatalf("DecodeHookInput() error = %v", err)
+	}
+	if event.SessionID != "s1" ||
+		event.HookEventName != "PreToolUse" ||
+		event.ToolName != "Read" ||
+		event.ToolUseID != "toolu_123" ||
+		event.ToolInput["file_path"] != "README.md" {
+		t.Fatalf("event = %+v, want legacy aliases decoded", event)
+	}
+}
+
+func TestDecodeHookInputPreservesLegacyHookEventAlias(t *testing.T) {
+	t.Parallel()
+
+	event, err := (&Claude{}).DecodeHookInput([]byte(`{"hook_event":"PreToolUse"}`))
+	if err != nil {
+		t.Fatalf("DecodeHookInput() error = %v", err)
+	}
+	if event.HookEventName != "PreToolUse" {
+		t.Fatalf("HookEventName = %q, want PreToolUse", event.HookEventName)
+	}
+}
+
 func TestDecodeHookInputAllowsMissingOptionalMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -116,7 +145,7 @@ func TestDecodeHookInputPreservesExplicitZeroDuration(t *testing.T) {
 func TestEncodeAllowOmitsPlaceholderReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "allowed")
+	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "allowed", nil)
 	if err != nil {
 		t.Fatalf("EncodeAllow() error = %v", err)
 	}
@@ -128,12 +157,69 @@ func TestEncodeAllowOmitsPlaceholderReason(t *testing.T) {
 func TestEncodeAllowKeepsMeaningfulReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "Allowed by read-only policy")
+	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "Allowed by read-only policy", nil)
 	if err != nil {
 		t.Fatalf("EncodeAllow() error = %v", err)
 	}
 	if !strings.Contains(string(out), "Allowed by read-only policy") {
 		t.Fatalf("EncodeAllow() = %s, want meaningful reason", out)
+	}
+}
+
+func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
+	t.Parallel()
+
+	out, err := (&Claude{}).EncodeAllow(
+		&agent.HookEvent{HookEventName: "PreToolUse"},
+		"allowed",
+		map[string]any{"command": `GITHUB_TOKEN="$(cat '/tmp/token')" gh pr view`},
+	)
+	if err != nil {
+		t.Fatalf("EncodeAllow() error = %v", err)
+	}
+	if !strings.Contains(string(out), "updatedInput") {
+		t.Fatalf("EncodeAllow() = %s, want updatedInput", out)
+	}
+	if !strings.Contains(string(out), "suppressOutput") {
+		t.Fatalf("EncodeAllow() = %s, want suppressOutput", out)
+	}
+}
+
+func TestEncodeClaudeResultMapsAskToDeny(t *testing.T) {
+	t.Parallel()
+
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
+		Decision:  hookruntime.DecisionAsk,
+		Reason:    "approval required",
+		RequestID: "req-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"permissionDecision":"deny"`) {
+		t.Fatalf("output = %s", string(out))
+	}
+	if !strings.Contains(string(out), `"permissionDecisionReason":"approval required Request ID: req-123"`) {
+		t.Fatalf("output = %s", string(out))
+	}
+}
+
+func TestEncodeClaudeResultDoesNotDuplicateAskRequestID(t *testing.T) {
+	t.Parallel()
+
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
+		Decision:  hookruntime.DecisionAsk,
+		Reason:    "approval required. Request ID: req-123",
+		RequestID: "req-123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(out), "Request ID: req-123"); got != 1 {
+		t.Fatalf("output = %s, request id count = %d", string(out), got)
+	}
+	if !strings.Contains(string(out), `"permissionDecision":"deny"`) {
+		t.Fatalf("output = %s", string(out))
 	}
 }
 

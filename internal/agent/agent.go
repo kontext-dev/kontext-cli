@@ -5,7 +5,7 @@ type Agent interface {
 
 	DecodeHookInput(input []byte) (*HookEvent, error)
 
-	EncodeAllow(event *HookEvent, reason string) ([]byte, error)
+	EncodeAllow(event *HookEvent, reason string, updatedInput map[string]any) ([]byte, error)
 
 	EncodeDeny(event *HookEvent, reason string) ([]byte, error)
 }
