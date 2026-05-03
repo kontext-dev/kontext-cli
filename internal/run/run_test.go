@@ -1104,6 +1104,9 @@ func TestGenerateSettingsWritesClaudeHooks(t *testing.T) {
 		if len(groups) != 1 {
 			t.Fatalf("%s groups len = %d, want 1", event, len(groups))
 		}
+		if groups[0].Matcher != "*" {
+			t.Fatalf("%s matcher = %q, want *", event, groups[0].Matcher)
+		}
 		if len(groups[0].Hooks) != 1 {
 			t.Fatalf("%s hooks len = %d, want 1", event, len(groups[0].Hooks))
 		}

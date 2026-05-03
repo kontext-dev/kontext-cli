@@ -13,7 +13,8 @@ type claudeSettings struct {
 }
 
 type hookGroup struct {
-	Hooks []hookDef `json:"hooks"`
+	Matcher string    `json:"matcher,omitempty"`
+	Hooks   []hookDef `json:"hooks"`
 }
 
 type hookDef struct {
@@ -24,6 +25,7 @@ type hookDef struct {
 
 func commandHookGroups(command string) []hookGroup {
 	return []hookGroup{{
+		Matcher: "*",
 		Hooks: []hookDef{{
 			Type:    "command",
 			Command: command,

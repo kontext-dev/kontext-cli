@@ -2,9 +2,12 @@ package sidecar
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +26,7 @@ type sidecarClient interface {
 const (
 	heartbeatMinInterval = 30 * time.Second
 	heartbeatMaxInterval = 5 * time.Minute
+	hookEvalTimeout      = 4 * time.Second
 )
 
 type heartbeatState struct {
@@ -230,7 +234,10 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 	}
 
 	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
-	result, err := s.client.ProcessHookEvent(ctx, hookEvent)
+	evalCtx, cancel := context.WithTimeout(ctx, hookEvalTimeout)
+	defer cancel()
+
+	result, err := s.client.ProcessHookEvent(evalCtx, hookEvent)
 	if err != nil {
 		s.diagnostic.Printf("sidecar enforce: %v\n", err)
 		accessMode := s.currentAccessMode()
@@ -337,11 +344,103 @@ func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *a
 	}
 
 	if len(req.ToolInput) > 0 {
-		hookEvent.ToolInput = req.ToolInput
+		hookEvent.ToolInput = enrichToolInput(req)
 	}
 	if len(req.ToolResponse) > 0 {
 		hookEvent.ToolResponse = req.ToolResponse
 	}
 
 	return hookEvent
+}
+
+func enrichToolInput(req *EvaluateRequest) []byte {
+	if req.HookEvent != "PreToolUse" || req.ToolName != "Bash" || req.CWD == "" || len(req.ToolInput) == 0 {
+		return req.ToolInput
+	}
+
+	var input map[string]any
+	if err := json.Unmarshal(req.ToolInput, &input); err != nil {
+		return req.ToolInput
+	}
+	if _, ok := input["command"].(string); !ok {
+		if _, ok := input["cmd"].(string); !ok {
+			return req.ToolInput
+		}
+	}
+
+	gitContext, ok := collectGitContext(req.CWD)
+	if !ok {
+		return req.ToolInput
+	}
+
+	kontext, _ := input["kontext"].(map[string]any)
+	if kontext == nil {
+		kontext = map[string]any{}
+	}
+	kontext["git"] = gitContext
+	input["kontext"] = kontext
+
+	data, err := json.Marshal(input)
+	if err != nil {
+		return req.ToolInput
+	}
+	return data
+}
+
+func collectGitContext(cwd string) (map[string]any, bool) {
+	root := strings.TrimSpace(runGit(cwd, "rev-parse", "--show-toplevel"))
+	if root == "" {
+		return nil, false
+	}
+
+	git := map[string]any{
+		"worktreeRoot": root,
+	}
+	if branch := strings.TrimSpace(runGit(cwd, "rev-parse", "--abbrev-ref", "HEAD")); branch != "" && branch != "HEAD" {
+		git["branch"] = branch
+	}
+
+	remoteNames := strings.Fields(runGit(cwd, "remote"))
+	remotes := map[string]string{}
+	for _, name := range remoteNames {
+		remoteURL := strings.TrimSpace(runGit(cwd, "remote", "get-url", name))
+		if remoteURL == "" {
+			continue
+		}
+		remotes[name] = sanitizeGitRemoteURL(remoteURL)
+	}
+	if len(remotes) > 0 {
+		git["remotes"] = remotes
+	}
+
+	return git, true
+}
+
+func runGit(cwd string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
+	cmd.Env = []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func sanitizeGitRemoteURL(remoteURL string) string {
+	if strings.Contains(remoteURL, "://") {
+		parts := strings.SplitN(remoteURL, "://", 2)
+		rest := parts[1]
+		if at := strings.LastIndex(rest, "@"); at >= 0 && strings.Contains(rest[at+1:], "github.com") {
+			rest = rest[at+1:]
+		}
+		return parts[0] + "://" + rest
+	}
+	return remoteURL
 }

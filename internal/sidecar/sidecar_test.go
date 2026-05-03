@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -266,6 +267,28 @@ func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	}
 }
 
+func TestEvaluatePreToolUseFailsClosedBeforeClaudeHookDeadline(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     &stubProcessor{delay: hookEvalTimeout + time.Second},
+		diagnostic: diagnostic.New(io.Discard, false),
+	}
+
+	start := time.Now()
+	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if elapsed := time.Since(start); elapsed > hookEvalTimeout+time.Second {
+		t.Fatalf("evaluate() took %s, want bounded by hook timeout", elapsed)
+	}
+}
+
 func TestEvaluatePreToolUseFailsClosedWhenEnforceModeCannotPersist(t *testing.T) {
 	t.Parallel()
 
@@ -456,6 +479,73 @@ func TestBuildHookEventRequestPreservesTelemetryPayload(t *testing.T) {
 	}
 }
 
+func TestBuildHookEventRequestEnrichesBashPreToolUseWithGitContext(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+
+	repoDir := t.TempDir()
+	runTestGit(t, repoDir, "init", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("test\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runTestGit(t, repoDir, "add", "README.md")
+	runTestGit(t, repoDir, "-c", "user.name=Kontext Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runTestGit(t, repoDir, "remote", "add", "origin", "https://token:x-oauth-basic@github.com/kontext-security/kontext-cli.git")
+
+	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		CWD:       repoDir,
+		ToolInput: json.RawMessage(`{"command":"git push --dry-run origin HEAD:test-kontext-access-smoke"}`),
+	})
+
+	var input map[string]any
+	if err := json.Unmarshal(got.ToolInput, &input); err != nil {
+		t.Fatalf("ToolInput JSON = %s: %v", got.ToolInput, err)
+	}
+	kontext := input["kontext"].(map[string]any)
+	git := kontext["git"].(map[string]any)
+	if git["branch"] != "feature" {
+		t.Fatalf("git.branch = %v, want feature", git["branch"])
+	}
+	remotes := git["remotes"].(map[string]any)
+	if remotes["origin"] != "https://github.com/kontext-security/kontext-cli.git" {
+		t.Fatalf("origin remote = %v, want sanitized GitHub URL", remotes["origin"])
+	}
+	if strings.Contains(string(got.ToolInput), "token") || strings.Contains(string(got.ToolInput), "x-oauth-basic") {
+		t.Fatalf("ToolInput leaked credential-bearing remote: %s", got.ToolInput)
+	}
+}
+
+func TestBuildHookEventRequestDoesNotEnrichNonPreToolUsePayloads(t *testing.T) {
+	t.Parallel()
+
+	toolInput := json.RawMessage(`{"command":"git push origin main"}`)
+	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
+		HookEvent: "PostToolUse",
+		ToolName:  "Bash",
+		CWD:       t.TempDir(),
+		ToolInput: toolInput,
+	})
+
+	if string(got.ToolInput) != string(toolInput) {
+		t.Fatalf("ToolInput = %s, want unchanged %s", got.ToolInput, toolInput)
+	}
+}
+
+func runTestGit(t *testing.T, cwd string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
 func TestBuildHookEventRequestPreservesExplicitFalseInterrupt(t *testing.T) {
 	t.Parallel()
 
@@ -517,11 +607,21 @@ func (a stubAddr) String() string { return string(a) }
 type stubProcessor struct {
 	result       *backend.ProcessHookEventResult
 	err          error
+	delay        time.Duration
 	processCalls int
 }
 
-func (s *stubProcessor) ProcessHookEvent(context.Context, *agentv1.ProcessHookEventRequest) (*backend.ProcessHookEventResult, error) {
+func (s *stubProcessor) ProcessHookEvent(ctx context.Context, _ *agentv1.ProcessHookEventRequest) (*backend.ProcessHookEventResult, error) {
 	s.processCalls++
+	if s.delay > 0 {
+		timer := time.NewTimer(s.delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
