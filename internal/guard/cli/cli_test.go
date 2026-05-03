@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	_ "github.com/kontext-security/kontext-cli/internal/agent/claude"
 )
 
 func TestHookObserveModeFailsOpenForPreToolUse(t *testing.T) {

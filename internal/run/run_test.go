@@ -1104,6 +1104,9 @@ func TestGenerateSettingsWritesClaudeHooks(t *testing.T) {
 		if len(groups) != 1 {
 			t.Fatalf("%s groups len = %d, want 1", event, len(groups))
 		}
+		if groups[0].Matcher != "*" {
+			t.Fatalf("%s matcher = %q, want *", event, groups[0].Matcher)
+		}
 		if len(groups[0].Hooks) != 1 {
 			t.Fatalf("%s hooks len = %d, want 1", event, len(groups[0].Hooks))
 		}
@@ -1118,5 +1121,36 @@ func TestGenerateSettingsWritesClaudeHooks(t *testing.T) {
 		if hook.Timeout != 10 {
 			t.Fatalf("%s hook timeout = %d, want 10", event, hook.Timeout)
 		}
+	}
+}
+
+func TestVerifyBlockingHookSettingsRequiresPreToolUseCommand(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	settingsPath, err := GenerateSettings(sessionDir, "/usr/local/bin/kontext", "claude")
+	if err != nil {
+		t.Fatalf("GenerateSettings() error = %v", err)
+	}
+	if err := VerifyBlockingHookSettings(settingsPath, "/usr/local/bin/kontext", "claude"); err != nil {
+		t.Fatalf("VerifyBlockingHookSettings() error = %v", err)
+	}
+
+	settings := claudeSettings{
+		Hooks: map[string][]hookGroup{
+			"PostToolUse": commandHookGroups("/usr/local/bin/kontext hook --agent claude"),
+		},
+	}
+	data, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	brokenPath := filepath.Join(sessionDir, "broken-settings.json")
+	if err := os.WriteFile(brokenPath, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := VerifyBlockingHookSettings(brokenPath, "/usr/local/bin/kontext", "claude"); err == nil {
+		t.Fatal("VerifyBlockingHookSettings() error = nil, want missing PreToolUse hook error")
 	}
 }

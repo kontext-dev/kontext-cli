@@ -71,7 +71,8 @@ func Start(ctx context.Context, opts Options) error {
 	}
 
 	// 2. Backend client — token source refreshes automatically on expiry
-	client := backend.NewClient(backend.BaseURL(), newSessionTokenSource(ctx, session, diagnostics))
+	tokenManager := newSessionTokenManager(ctx, session, diagnostics)
+	client := backend.NewClient(backend.BaseURL(), tokenManager.Token)
 
 	// 3. Create session via ConnectRPC
 	hostname, _ := os.Hostname()
@@ -111,13 +112,17 @@ func Start(ctx context.Context, opts Options) error {
 	// dashboard relies on this state to skip generic onboarding, so a failure
 	// here must abort — a half-set-up session would leave the org looking
 	// un-onboarded while the CLI appears to work.
-	bootstrapResp, err := client.BootstrapCli(ctx, &agentv1.BootstrapCliRequest{
+	bootstrapResult, err := client.BootstrapCli(ctx, &agentv1.BootstrapCliRequest{
 		AgentId: createResp.AgentId,
 	})
 	if err != nil {
 		return fmt.Errorf("bootstrap cli application: %w", err)
 	}
-	fmt.Fprintln(os.Stderr, "✓ Kontext CLI bootstrap complete")
+	bootstrapResp := bootstrapResult.Response
+	if bootstrapResult.AccessMode == backend.HostedAccessModeEnforce && bootstrapResult.PolicySetEpoch == "" {
+		return errors.New("bootstrap cli application: enforce mode missing policy epoch")
+	}
+	fmt.Fprintf(os.Stderr, "✓ Kontext CLI bootstrap complete (%s)\n", bootstrapResult.AccessMode)
 
 	syncResult, err := credential.EnsureManagedTemplate(
 		opts.TemplateFile,
@@ -171,8 +176,6 @@ func Start(ctx context.Context, opts Options) error {
 		)
 	}
 
-	// 5. Resolve credentials (before sidecar starts — no background goroutines yet,
-	//    so reading session fields is safe without synchronization)
 	var resolved []credential.Resolved
 	if len(templateDoc.Entries) > 0 {
 		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics, fetchConnectURLForConnectFlow)
@@ -189,7 +192,14 @@ func Start(ctx context.Context, opts Options) error {
 		return fmt.Errorf("create session dir: %w", err)
 	}
 
-	sc, err := sidecar.New(sessionDir, client, sessionID, opts.Agent, diagnostics)
+	sc, err := sidecar.New(
+		sessionDir,
+		client,
+		sessionID,
+		opts.Agent,
+		bootstrapResult.AccessMode,
+		diagnostics,
+	)
 	if err != nil {
 		return fmt.Errorf("sidecar: %w", err)
 	}
@@ -204,11 +214,18 @@ func Start(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("generate settings: %w", err)
 	}
+	if bootstrapResult.AccessMode == backend.HostedAccessModeEnforce {
+		if err := VerifyBlockingHookSettings(settingsPath, kontextBin, opts.Agent); err != nil {
+			return fmt.Errorf("verify enforce hook settings: %w", err)
+		}
+	}
 
 	// 8. Build env
 	env := buildEnv(templateDoc, resolved)
 	env = append(env, "KONTEXT_SOCKET="+sc.SocketPath())
 	env = append(env, "KONTEXT_SESSION_ID="+sessionID)
+	env = append(env, "KONTEXT_ACCESS_MODE="+string(bootstrapResult.AccessMode))
+	env = append(env, "KONTEXT_ACCESS_MODE_PATH="+sc.AccessModePath())
 
 	// 9. Launch agent with hooks
 	fmt.Fprintf(os.Stderr, "\nLaunching %s...\n\n", opts.Agent)
@@ -891,37 +908,51 @@ func supportedAgents() []string {
 	return names
 }
 
-// newSessionTokenSource returns a TokenSource that transparently refreshes
+type sessionTokenManager struct {
+	ctx         context.Context
+	session     *auth.Session
+	diagnostics diagnostic.Logger
+	mu          sync.Mutex
+}
+
+func newSessionTokenManager(ctx context.Context, session *auth.Session, diagnostics diagnostic.Logger) *sessionTokenManager {
+	return &sessionTokenManager{ctx: ctx, session: session, diagnostics: diagnostics}
+}
+
+// Token returns a TokenSource-compatible function that transparently refreshes
 // the OIDC access token when it expires, so long-running sessions keep working.
 // If forceRefresh is true, the token is refreshed unconditionally (used by
 // the transport layer after receiving a 401 from the server).
-func newSessionTokenSource(ctx context.Context, session *auth.Session, diagnostics diagnostic.Logger) backend.TokenSource {
-	mu := &sync.Mutex{}
-	return func(forceRefresh bool) (string, error) {
-		mu.Lock()
-		defer mu.Unlock()
+func (m *sessionTokenManager) Token(forceRefresh bool) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-		if !shouldRefreshSession(session, forceRefresh, time.Now()) {
-			return session.AccessToken, nil
-		}
-
-		refreshed, err := auth.RefreshSession(ctx, session)
-		if err != nil {
-			return "", fmt.Errorf("token refresh failed: %w", err)
-		}
-
-		fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
-
-		// Persist so other processes (and the next `kontext start`) see the new token
-		if saveErr := auth.SaveSession(refreshed); saveErr != nil {
-			diagnostics.Printf("persist refreshed session failed: %v\n", saveErr)
-			fmt.Fprintln(os.Stderr, "⚠ Could not persist refreshed session.")
-		}
-
-		// Update the shared session pointer for subsequent calls
-		*session = *refreshed
-		return session.AccessToken, nil
+	if !shouldRefreshSession(m.session, forceRefresh, time.Now()) {
+		return m.session.AccessToken, nil
 	}
+
+	refreshed, err := auth.RefreshSession(m.ctx, m.session)
+	if err != nil {
+		return "", fmt.Errorf("token refresh failed: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "✓ Token refreshed\n")
+
+	// Persist so other processes (and the next `kontext start`) see the new token
+	if saveErr := auth.SaveSession(refreshed); saveErr != nil {
+		m.diagnostics.Printf("persist refreshed session failed: %v\n", saveErr)
+		fmt.Fprintln(os.Stderr, "⚠ Could not persist refreshed session.")
+	}
+
+	// Update the shared session pointer for subsequent calls
+	*m.session = *refreshed
+	return m.session.AccessToken, nil
+}
+
+func (m *sessionTokenManager) ExchangeCredential(ctx context.Context, entry credential.Entry, clientID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return exchangeCredential(ctx, m.session, entry, clientID)
 }
 
 func shouldRefreshSession(session *auth.Session, forceRefresh bool, now time.Time) bool {

@@ -5,14 +5,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext-cli/internal/agent/claude"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 )
 
-func TestClaudeAdapterDecodePreservesHookEvent(t *testing.T) {
+func TestAgentAdapterDecodePreservesHookEvent(t *testing.T) {
 	t.Parallel()
 
 	input := strings.NewReader(`{"session_id":"s1","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":".env"},"tool_use_id":"toolu_123","cwd":"/tmp/project"}`)
-	event, err := ClaudeAdapter{}.Decode(input)
+	event, err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Decode(input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,11 +32,11 @@ func TestClaudeAdapterDecodePreservesHookEvent(t *testing.T) {
 	}
 }
 
-func TestClaudeAdapterEncodeObserveModeAllowsWouldDeny(t *testing.T) {
+func TestAgentAdapterEncodeObserveModeAllowsWouldDeny(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := ClaudeAdapter{}.Encode(&out, Result{
+	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(&out, Result{
 		HookName: "PreToolUse",
 		CanBlock: true,
 		Decision: risk.DecisionDeny,
@@ -53,11 +54,11 @@ func TestClaudeAdapterEncodeObserveModeAllowsWouldDeny(t *testing.T) {
 	}
 }
 
-func TestClaudeAdapterEncodeEnforceModeDeniesAsk(t *testing.T) {
+func TestAgentAdapterEncodeEnforceModeDeniesAsk(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := ClaudeAdapter{}.Encode(&out, Result{
+	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(&out, Result{
 		HookName: "PreToolUse",
 		CanBlock: true,
 		Decision: risk.DecisionAsk,

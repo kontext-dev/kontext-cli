@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 type EvaluateRequest struct {
@@ -24,9 +26,15 @@ type EvaluateRequest struct {
 }
 
 type EvaluateResult struct {
-	Type    string `json:"type"`
-	Allowed bool   `json:"allowed"`
-	Reason  string `json:"reason"`
+	Type         string               `json:"type"`
+	Decision     hookruntime.Decision `json:"decision,omitempty"`
+	Allowed      bool                 `json:"allowed"`
+	Reason       string               `json:"reason"`
+	ReasonCode   string               `json:"reason_code,omitempty"`
+	RequestID    string               `json:"request_id,omitempty"`
+	Mode         string               `json:"mode,omitempty"`
+	Epoch        string               `json:"epoch,omitempty"`
+	UpdatedInput map[string]any       `json:"updated_input,omitempty"`
 }
 
 func WriteMessage(conn net.Conn, v any) error {

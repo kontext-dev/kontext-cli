@@ -26,6 +26,28 @@ type Client struct {
 	rpc agentv1connect.AgentServiceClient
 }
 
+type HostedAccessMode string
+
+const (
+	HostedAccessModeDisabled HostedAccessMode = "disabled"
+	HostedAccessModeNoPolicy HostedAccessMode = "no_policy"
+	HostedAccessModeEnforce  HostedAccessMode = "enforce"
+)
+
+type BootstrapCliResult struct {
+	Response       *agentv1.BootstrapCliResponse
+	AccessMode     HostedAccessMode
+	PolicySetEpoch string
+}
+
+type ProcessHookEventResult struct {
+	Response       *agentv1.ProcessHookEventResponse
+	ReasonCode     string
+	RequestID      string
+	AccessMode     HostedAccessMode
+	PolicySetEpoch string
+}
+
 // NewClient creates a ConnectRPC client that fetches a fresh token per request.
 func NewClient(baseURL string, ts TokenSource) *Client {
 	httpClient := &http.Client{
@@ -62,12 +84,28 @@ func (c *Client) CreateSession(ctx context.Context, req *agentv1.CreateSessionRe
 }
 
 // BootstrapCli prepares the shared CLI application for env template sync.
-func (c *Client) BootstrapCli(ctx context.Context, req *agentv1.BootstrapCliRequest) (*agentv1.BootstrapCliResponse, error) {
+func (c *Client) BootstrapCli(ctx context.Context, req *agentv1.BootstrapCliRequest) (*BootstrapCliResult, error) {
 	resp, err := c.rpc.BootstrapCli(ctx, connect.NewRequest(req))
 	if err != nil {
 		return nil, fmt.Errorf("BootstrapCli: %w", err)
 	}
-	return resp.Msg, nil
+	mode := HostedAccessMode(resp.Msg.GetAccessMode())
+	if mode == "" {
+		mode = HostedAccessMode(resp.Header().Get("x-kontext-access-mode"))
+	}
+	if mode == "" {
+		return nil, fmt.Errorf("BootstrapCli: missing hosted access mode")
+	}
+	switch mode {
+	case HostedAccessModeDisabled, HostedAccessModeNoPolicy, HostedAccessModeEnforce:
+	default:
+		return nil, fmt.Errorf("BootstrapCli: unknown hosted access mode %q", mode)
+	}
+	return &BootstrapCliResult{
+		Response:       resp.Msg,
+		AccessMode:     mode,
+		PolicySetEpoch: firstNonEmpty(resp.Msg.GetPolicySetEpoch(), resp.Header().Get("x-kontext-policy-set-epoch")),
+	}, nil
 }
 
 // Heartbeat keeps a session alive.
@@ -86,13 +124,49 @@ func (c *Client) EndSession(ctx context.Context, sessionID string) error {
 	return err
 }
 
-// IngestEvent sends a single hook event via the ProcessHookEvent unary RPC.
-func (c *Client) IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error {
-	_, err := c.rpc.ProcessHookEvent(ctx, connect.NewRequest(req))
+// ProcessHookEvent sends a single hook event via the ProcessHookEvent unary RPC.
+func (c *Client) ProcessHookEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) (*ProcessHookEventResult, error) {
+	resp, err := c.rpc.ProcessHookEvent(ctx, connect.NewRequest(req))
 	if err != nil {
-		return fmt.Errorf("ProcessHookEvent: %w", err)
+		return nil, fmt.Errorf("ProcessHookEvent: %w", err)
 	}
-	return nil
+	mode := HostedAccessMode(resp.Header().Get("x-kontext-access-mode"))
+	if mode == "" {
+		mode = HostedAccessMode(resp.Msg.GetAccessMode())
+	}
+	switch mode {
+	case "", HostedAccessModeDisabled, HostedAccessModeNoPolicy, HostedAccessModeEnforce:
+	default:
+		return nil, fmt.Errorf("ProcessHookEvent: unknown hosted access mode %q", mode)
+	}
+	reasonCode := resp.Msg.GetReasonCode()
+	if reasonCode == "" {
+		reasonCode = resp.Header().Get("x-kontext-access-reason-code")
+	}
+	requestID := resp.Msg.GetRequestId()
+	if requestID == "" {
+		requestID = resp.Header().Get("x-kontext-access-request-id")
+	}
+	policySetEpoch := resp.Msg.GetPolicySetEpoch()
+	if policySetEpoch == "" {
+		policySetEpoch = resp.Header().Get("x-kontext-policy-set-epoch")
+	}
+	return &ProcessHookEventResult{
+		Response:       resp.Msg,
+		ReasonCode:     reasonCode,
+		RequestID:      requestID,
+		AccessMode:     mode,
+		PolicySetEpoch: policySetEpoch,
+	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // bearerTransport fetches a fresh token for every outgoing request.

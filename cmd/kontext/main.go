@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -190,8 +189,7 @@ func hookCmd() *cobra.Command {
 			}
 
 			hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
-				allowed, reason, err := evaluateViaSidecar(socketPath, agentName, e)
-				return hookruntime.ResultFromBool(allowed, reason), err
+				return evaluateViaSidecar(socketPath, hookruntime.EventFromAgent(agentName, e))
 			})
 			return nil
 		},
@@ -202,61 +200,90 @@ func hookCmd() *cobra.Command {
 	return cmd
 }
 
-func evaluateViaSidecar(socketPath, agentName string, e *agent.HookEvent) (bool, string, error) {
+func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime.Result, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
-		return true, "sidecar unreachable", nil
+		return sidecarFailureResult(event, "sidecar unreachable"), nil
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return true, "sidecar deadline error", nil
+		return sidecarFailureResult(event, "sidecar deadline error"), nil
 	}
 
 	req := sidecar.EvaluateRequest{
 		Type:           "evaluate",
-		Agent:          agentName,
-		HookEvent:      e.HookEventName,
-		ToolName:       e.ToolName,
-		ToolUseID:      e.ToolUseID,
-		CWD:            e.CWD,
-		PermissionMode: e.PermissionMode,
-		DurationMs:     e.DurationMs,
-		Error:          e.Error,
-		IsInterrupt:    e.IsInterrupt,
+		Agent:          event.Agent,
+		HookEvent:      event.HookEventName,
+		ToolName:       event.ToolName,
+		ToolUseID:      event.ToolUseID,
+		CWD:            event.CWD,
+		PermissionMode: event.PermissionMode,
+		DurationMs:     event.DurationMs,
+		Error:          event.Error,
+		IsInterrupt:    event.IsInterrupt,
 	}
 
-	if e.ToolInput != nil {
-		data, err := marshalJSON(e.ToolInput)
+	if event.ToolInput != nil {
+		data, err := hookruntime.MarshalMap(event.ToolInput)
 		if err != nil {
-			return true, "sidecar marshal error", nil
+			return sidecarFailureResult(event, "sidecar marshal error"), nil
 		}
 		req.ToolInput = data
 	}
-	if e.ToolResponse != nil {
-		data, err := marshalJSON(e.ToolResponse)
+	if event.ToolResponse != nil {
+		data, err := hookruntime.MarshalMap(event.ToolResponse)
 		if err != nil {
-			return true, "sidecar marshal error", nil
+			return sidecarFailureResult(event, "sidecar marshal error"), nil
 		}
 		req.ToolResponse = data
 	}
 
 	if err := sidecar.WriteMessage(conn, req); err != nil {
-		return true, "sidecar write error", nil
+		return sidecarFailureResult(event, "sidecar write error"), nil
 	}
 
 	var result sidecar.EvaluateResult
 	if err := sidecar.ReadMessage(conn, &result); err != nil {
-		return true, "sidecar read error", nil
+		return sidecarFailureResult(event, "sidecar read error"), nil
 	}
 
-	return result.Allowed, result.Reason, nil
+	decision := result.Decision
+	if decision == "" {
+		decision = hookruntime.ResultFromBool(result.Allowed, result.Reason).Decision
+	}
+	return hookruntime.Result{
+		Decision:     decision,
+		Reason:       result.Reason,
+		ReasonCode:   result.ReasonCode,
+		RequestID:    result.RequestID,
+		Mode:         result.Mode,
+		Epoch:        result.Epoch,
+		UpdatedInput: result.UpdatedInput,
+	}, nil
 }
 
-func marshalJSON(v any) ([]byte, error) {
-	if v == nil {
-		return nil, nil
+func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Result {
+	if event.HookEventName != "PreToolUse" {
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
 	}
-	return json.Marshal(v)
+	if currentHostedAccessMode() == "enforce" {
+		return hookruntime.Result{Decision: hookruntime.DecisionDeny, Reason: reason, Mode: "enforce"}
+	}
+	return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
+}
+
+func currentHostedAccessMode() string {
+	mode := os.Getenv("KONTEXT_ACCESS_MODE")
+	if mode == "disabled" || mode == "no_policy" {
+		return mode
+	}
+	if mode == "enforce" {
+		return "enforce"
+	}
+	if os.Getenv("KONTEXT_ACCESS_MODE_PATH") != "" {
+		return "enforce"
+	}
+	return mode
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)

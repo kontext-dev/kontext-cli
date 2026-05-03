@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type claudeSettings struct {
@@ -12,7 +13,8 @@ type claudeSettings struct {
 }
 
 type hookGroup struct {
-	Hooks []hookDef `json:"hooks"`
+	Matcher string    `json:"matcher,omitempty"`
+	Hooks   []hookDef `json:"hooks"`
 }
 
 type hookDef struct {
@@ -23,6 +25,7 @@ type hookDef struct {
 
 func commandHookGroups(command string) []hookGroup {
 	return []hookGroup{{
+		Matcher: "*",
 		Hooks: []hookDef{{
 			Type:    "command",
 			Command: command,
@@ -55,4 +58,27 @@ func GenerateSettings(sessionDir, kontextBinary, agentName string) (string, erro
 	}
 
 	return settingsPath, nil
+}
+
+func VerifyBlockingHookSettings(settingsPath, kontextBinary, agentName string) error {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return fmt.Errorf("read settings: %w", err)
+	}
+
+	var settings claudeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fmt.Errorf("parse settings: %w", err)
+	}
+
+	wantCommand := fmt.Sprintf("%s hook --agent %s", kontextBinary, agentName)
+	for _, group := range settings.Hooks["PreToolUse"] {
+		for _, hook := range group.Hooks {
+			if hook.Type == "command" && hook.Command == wantCommand && hook.Timeout > 0 {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("PreToolUse command hook missing for %s", strings.TrimSpace(wantCommand))
 }

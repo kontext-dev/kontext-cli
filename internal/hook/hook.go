@@ -36,7 +36,7 @@ func (c agentCodec) DecodeHookEvent(input []byte) (hookruntime.Event, error) {
 func (c agentCodec) EncodeHookResult(event hookruntime.Event, result hookruntime.Result) ([]byte, error) {
 	agentEvent := agentEventFromRuntime(event)
 	if result.Decision == hookruntime.DecisionAsk {
-		return hookruntime.EncodeClaudeResult(agentEvent.HookEventName, result)
+		return c.agent.EncodeDeny(agentEvent, result.ClaudeReason())
 	}
 	if result.Allowed() {
 		return c.agent.EncodeAllow(agentEvent, result.ClaudeReason(), result.UpdatedInput)

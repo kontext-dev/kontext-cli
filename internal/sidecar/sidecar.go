@@ -2,25 +2,41 @@ package sidecar
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
+	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
 // sidecarClient is the backend surface used by the sidecar.
 type sidecarClient interface {
 	Heartbeat(ctx context.Context, sessionID string) error
-	IngestEvent(ctx context.Context, req *agentv1.ProcessHookEventRequest) error
+	ProcessHookEvent(context.Context, *agentv1.ProcessHookEventRequest) (*backend.ProcessHookEventResult, error)
 }
 
 const (
 	heartbeatMinInterval = 30 * time.Second
 	heartbeatMaxInterval = 5 * time.Minute
+	hookEvalTimeout      = 4 * time.Second
 )
+
+var trustedGitSearchDirs = []string{
+	"/usr/bin",
+	"/bin",
+	"/usr/local/bin",
+	"/opt/homebrew/bin",
+	"/opt/local/bin",
+}
 
 type heartbeatState struct {
 	interval    time.Duration
@@ -67,20 +83,25 @@ func (h *heartbeatState) record(now time.Time, err error, logf func(string, ...a
 
 type Server struct {
 	socketPath string
+	modePath   string
 	listener   net.Listener
 	sessionID  string
 	agentName  string
+	mu         sync.RWMutex
+	accessMode backend.HostedAccessMode
 	client     sidecarClient
 	diagnostic diagnostic.Logger
 	cancel     context.CancelFunc
 }
 
 // New creates a new sidecar server.
-func New(sessionDir string, client sidecarClient, sessionID, agentName string, diagnostics diagnostic.Logger) (*Server, error) {
+func New(sessionDir string, client sidecarClient, sessionID, agentName string, accessMode backend.HostedAccessMode, diagnostics diagnostic.Logger) (*Server, error) {
 	return &Server{
 		socketPath: filepath.Join(sessionDir, "kontext.sock"),
+		modePath:   filepath.Join(sessionDir, "access-mode"),
 		sessionID:  sessionID,
 		agentName:  agentName,
+		accessMode: accessMode,
 		client:     client,
 		diagnostic: diagnostics,
 	}, nil
@@ -88,8 +109,32 @@ func New(sessionDir string, client sidecarClient, sessionID, agentName string, d
 
 func (s *Server) SocketPath() string { return s.socketPath }
 
+func (s *Server) AccessModePath() string { return s.modePath }
+
+func (s *Server) currentAccessMode() backend.HostedAccessMode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.accessMode
+}
+
+func (s *Server) refreshAccessMode(mode backend.HostedAccessMode) error {
+	if mode == "" {
+		return nil
+	}
+	if err := os.WriteFile(s.modePath, []byte(mode), 0o600); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.accessMode = mode
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *Server) Start(ctx context.Context) error {
 	os.Remove(s.socketPath)
+	if err := os.WriteFile(s.modePath, []byte(s.currentAccessMode()), 0o600); err != nil {
+		return err
+	}
 
 	ln, err := net.Listen("unix", s.socketPath)
 	if err != nil {
@@ -147,19 +192,26 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	result := defaultAllowResult()
+	result := s.evaluate(ctx, &req)
 	if err := WriteMessage(conn, result); err != nil {
 		s.diagnostic.Printf("sidecar write: %v\n", err)
 		return
 	}
 
-	go s.ingestEvent(ctx, &req)
+	if req.HookEvent != "PreToolUse" {
+		go s.ingestEvent(ctx, &req)
+	}
 }
 
 func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
-	if err := s.client.IngestEvent(ctx, hookEvent); err != nil {
+	result, err := s.client.ProcessHookEvent(ctx, hookEvent)
+	if err != nil {
 		s.diagnostic.Printf("sidecar ingest: %v\n", err)
+		return
+	}
+	if err := s.refreshAccessMode(result.AccessMode); err != nil {
+		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
 	}
 }
 
@@ -185,8 +237,112 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 	}
 }
 
+func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateResult {
+	if req.HookEvent != "PreToolUse" {
+		return defaultAllowResult()
+	}
+
+	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
+	evalCtx, cancel := context.WithTimeout(ctx, hookEvalTimeout)
+	defer cancel()
+
+	result, err := s.client.ProcessHookEvent(evalCtx, hookEvent)
+	if err != nil {
+		s.diagnostic.Printf("sidecar enforce: %v\n", err)
+		accessMode := s.currentAccessMode()
+		if accessMode != backend.HostedAccessModeEnforce {
+			return resultFromRuntime(hookruntime.Result{
+				Decision: hookruntime.DecisionAllow,
+				Reason:   "Kontext hosted access is not enforcing.",
+				Mode:     string(accessMode),
+			})
+		}
+		return EvaluateResult{
+			Type:     "result",
+			Decision: hookruntime.DecisionDeny,
+			Allowed:  false,
+			Reason:   "Kontext access policy could not be evaluated.",
+		}
+	}
+	if err := s.refreshAccessMode(result.AccessMode); err != nil {
+		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
+		if result.AccessMode == backend.HostedAccessModeEnforce {
+			return EvaluateResult{
+				Type:     "result",
+				Decision: hookruntime.DecisionDeny,
+				Allowed:  false,
+				Reason:   "Kontext access policy mode could not be persisted.",
+				Mode:     string(result.AccessMode),
+			}
+		}
+	}
+
+	accessMode := result.AccessMode
+	if accessMode == "" {
+		accessMode = s.currentAccessMode()
+	}
+	resp := result.Response
+	if accessMode != backend.HostedAccessModeEnforce {
+		return resultFromRuntime(hookruntime.Result{
+			Decision:   hookruntime.DecisionAllow,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(accessMode),
+			Epoch:      result.PolicySetEpoch,
+		})
+	}
+
+	switch resp.GetDecision() {
+	case agentv1.Decision_DECISION_ALLOW:
+		runtimeResult := hookruntime.Result{
+			Decision:   hookruntime.DecisionAllow,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(accessMode),
+			Epoch:      result.PolicySetEpoch,
+		}
+		return resultFromRuntime(runtimeResult)
+	case agentv1.Decision_DECISION_ASK:
+		return resultFromRuntime(hookruntime.Result{
+			Decision:   hookruntime.DecisionAsk,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(accessMode),
+			Epoch:      result.PolicySetEpoch,
+		})
+	case agentv1.Decision_DECISION_DENY:
+		fallthrough
+	default:
+		return resultFromRuntime(hookruntime.Result{
+			Decision:   hookruntime.DecisionDeny,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(accessMode),
+			Epoch:      result.PolicySetEpoch,
+		})
+	}
+}
+
 func defaultAllowResult() EvaluateResult {
-	return EvaluateResult{Type: "result", Allowed: true}
+	return resultFromRuntime(hookruntime.Result{Decision: hookruntime.DecisionAllow})
+}
+
+func resultFromRuntime(result hookruntime.Result) EvaluateResult {
+	return EvaluateResult{
+		Type:         "result",
+		Decision:     result.Decision,
+		Allowed:      result.Allowed(),
+		Reason:       result.Reason,
+		ReasonCode:   result.ReasonCode,
+		RequestID:    result.RequestID,
+		Mode:         result.Mode,
+		Epoch:        result.Epoch,
+		UpdatedInput: result.UpdatedInput,
+	}
 }
 
 func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {
@@ -212,11 +368,122 @@ func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *a
 	}
 
 	if len(req.ToolInput) > 0 {
-		hookEvent.ToolInput = req.ToolInput
+		hookEvent.ToolInput = enrichToolInput(req)
 	}
 	if len(req.ToolResponse) > 0 {
 		hookEvent.ToolResponse = req.ToolResponse
 	}
 
 	return hookEvent
+}
+
+func enrichToolInput(req *EvaluateRequest) []byte {
+	if req.HookEvent != "PreToolUse" || req.ToolName != "Bash" || req.CWD == "" || len(req.ToolInput) == 0 {
+		return req.ToolInput
+	}
+
+	var input map[string]any
+	if err := json.Unmarshal(req.ToolInput, &input); err != nil {
+		return req.ToolInput
+	}
+	if _, ok := input["command"].(string); !ok {
+		if _, ok := input["cmd"].(string); !ok {
+			return req.ToolInput
+		}
+	}
+
+	gitContext, ok := collectGitContext(req.CWD)
+	if !ok {
+		return req.ToolInput
+	}
+
+	kontext, _ := input["kontext"].(map[string]any)
+	if kontext == nil {
+		kontext = map[string]any{}
+	}
+	kontext["git"] = gitContext
+	input["kontext"] = kontext
+
+	data, err := json.Marshal(input)
+	if err != nil {
+		return req.ToolInput
+	}
+	return data
+}
+
+func collectGitContext(cwd string) (map[string]any, bool) {
+	gitPath, ok := trustedGitPath()
+	if !ok {
+		return nil, false
+	}
+
+	root := strings.TrimSpace(runGit(gitPath, cwd, "rev-parse", "--show-toplevel"))
+	if root == "" {
+		return nil, false
+	}
+
+	git := map[string]any{
+		"worktreeRoot": root,
+	}
+	if branch := strings.TrimSpace(runGit(gitPath, cwd, "rev-parse", "--abbrev-ref", "HEAD")); branch != "" && branch != "HEAD" {
+		git["branch"] = branch
+	}
+
+	remoteNames := strings.Fields(runGit(gitPath, cwd, "remote"))
+	remotes := map[string]string{}
+	for _, name := range remoteNames {
+		remoteURL := strings.TrimSpace(runGit(gitPath, cwd, "remote", "get-url", name))
+		if remoteURL == "" {
+			continue
+		}
+		remotes[name] = sanitizeGitRemoteURL(remoteURL)
+	}
+	if len(remotes) > 0 {
+		git["remotes"] = remotes
+	}
+
+	return git, true
+}
+
+func trustedGitPath() (string, bool) {
+	for _, dir := range trustedGitSearchDirs {
+		path := filepath.Join(dir, "git")
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return path, true
+	}
+	return "", false
+}
+
+func runGit(gitPath, cwd string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, gitPath, append([]string{"-C", cwd}, args...)...)
+	cmd.Env = []string{
+		"GIT_TERMINAL_PROMPT=0",
+		"PATH=" + filepath.Dir(gitPath),
+		"HOME=" + os.Getenv("HOME"),
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func sanitizeGitRemoteURL(remoteURL string) string {
+	if strings.Contains(remoteURL, "://") {
+		parsed, err := url.Parse(remoteURL)
+		if err != nil || parsed.Host == "" {
+			return remoteURL
+		}
+		if parsed.User != nil {
+			parsed.User = nil
+		}
+		return parsed.String()
+	}
+	return remoteURL
 }
