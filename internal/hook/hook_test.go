@@ -91,11 +91,11 @@ func TestRunMapsAskToBlockingDenyWithRequestID(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("run() exit code = %d, want 2", code)
 	}
-	if !strings.Contains(stdout.String(), `"permissionDecision":"deny"`) {
-		t.Fatalf("stdout = %q, want deny decision", stdout.String())
+	if stdout.String() != "DENY" {
+		t.Fatalf("stdout = %q, want agent deny output", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "Request ID: req-123") {
-		t.Fatalf("stdout = %q, want request id", stdout.String())
+	if !strings.Contains(stub.denyReason, "Request ID: req-123") {
+		t.Fatalf("deny reason = %q, want request id", stub.denyReason)
 	}
 	if !strings.Contains(stderr.String(), "Request ID: req-123") {
 		t.Fatalf("stderr = %q, want request id", stderr.String())

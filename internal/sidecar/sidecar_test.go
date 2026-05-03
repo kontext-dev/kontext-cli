@@ -246,6 +246,98 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	}
 }
 
+func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		decision agentv1.Decision
+	}{
+		{name: "ask", decision: agentv1.Decision_DECISION_ASK},
+		{name: "deny", decision: agentv1.Decision_DECISION_DENY},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &Server{
+				sessionID:  "session-123",
+				agentName:  "claude",
+				modePath:   filepath.Join(t.TempDir(), "access-mode"),
+				accessMode: backend.HostedAccessModeEnforce,
+				client: &stubProcessor{
+					result: &backend.ProcessHookEventResult{
+						Response: &agentv1.ProcessHookEventResponse{
+							Decision: tc.decision,
+							Reason:   "backend observed a block",
+						},
+						ReasonCode:     "OBSERVE_ONLY",
+						RequestID:      "request-observe",
+						AccessMode:     backend.HostedAccessModeNoPolicy,
+						PolicySetEpoch: "7",
+					},
+				},
+				diagnostic: diagnostic.New(io.Discard, false),
+			}
+
+			result := s.evaluate(context.Background(), &EvaluateRequest{
+				HookEvent: "PreToolUse",
+				ToolName:  "Bash",
+				ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
+			})
+
+			if !result.Allowed {
+				t.Fatalf("evaluate().Allowed = false, want true for %s in no_policy mode", tc.name)
+			}
+			if result.Decision != hookruntime.DecisionAllow {
+				t.Fatalf("evaluate().Decision = %q, want allow", result.Decision)
+			}
+			if result.Reason != "backend observed a block" {
+				t.Fatalf("evaluate().Reason = %q, want backend reason", result.Reason)
+			}
+			if result.ReasonCode != "OBSERVE_ONLY" || result.RequestID != "request-observe" || result.Mode != "no_policy" || result.Epoch != "7" {
+				t.Fatalf("evaluate() metadata = reasonCode:%q requestID:%q mode:%q epoch:%q", result.ReasonCode, result.RequestID, result.Mode, result.Epoch)
+			}
+		})
+	}
+}
+
+func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		modePath:   filepath.Join(t.TempDir(), "access-mode"),
+		accessMode: backend.HostedAccessModeEnforce,
+		client: &stubProcessor{
+			result: &backend.ProcessHookEventResult{
+				Response: &agentv1.ProcessHookEventResponse{
+					Decision: agentv1.Decision_DECISION_DENY,
+					Reason:   "blocked",
+				},
+				ReasonCode: "DENY_POLICY_CHECK",
+			},
+		},
+		diagnostic: diagnostic.New(io.Discard, false),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
+	})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if result.Decision != hookruntime.DecisionDeny {
+		t.Fatalf("evaluate().Decision = %q, want deny", result.Decision)
+	}
+	if result.Mode != string(backend.HostedAccessModeEnforce) {
+		t.Fatalf("evaluate().Mode = %q, want enforce", result.Mode)
+	}
+}
+
 func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	t.Parallel()
 
@@ -520,6 +612,65 @@ func TestBuildHookEventRequestEnrichesBashPreToolUseWithGitContext(t *testing.T)
 	}
 }
 
+func TestBuildHookEventRequestUsesTrustedGitExecutableForContext(t *testing.T) {
+	gitPath, ok := trustedGitPath()
+	if !ok {
+		t.Skip("trusted git unavailable")
+	}
+
+	repoDir := t.TempDir()
+	runTestGitPath(t, gitPath, repoDir, "init", "-b", "trusted-branch")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("test\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runTestGitPath(t, gitPath, repoDir, "add", "README.md")
+	runTestGitPath(t, gitPath, repoDir, "-c", "user.name=Kontext Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+
+	fakeBin := t.TempDir()
+	fakeGit := filepath.Join(fakeBin, "git")
+	if err := os.WriteFile(fakeGit, []byte("#!/bin/sh\necho forged\n"), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		CWD:       repoDir,
+		ToolInput: json.RawMessage(`{"command":"git status"}`),
+	})
+
+	var input map[string]any
+	if err := json.Unmarshal(got.ToolInput, &input); err != nil {
+		t.Fatalf("ToolInput JSON = %s: %v", got.ToolInput, err)
+	}
+	kontext := input["kontext"].(map[string]any)
+	git := kontext["git"].(map[string]any)
+	if git["worktreeRoot"] == "forged" {
+		t.Fatal("git context used PATH-resolved fake git")
+	}
+	if git["branch"] != "trusted-branch" {
+		t.Fatalf("git.branch = %v, want trusted-branch", git["branch"])
+	}
+}
+
+func TestSanitizeGitRemoteURLStripsCredentialsFromAnyHost(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"https://token@gitlab.com/org/repo.git":            "https://gitlab.com/org/repo.git",
+		"https://oauth2:secret@bitbucket.org/org/repo.git": "https://bitbucket.org/org/repo.git",
+		"https://token@github.enterprise.local/org/repo":   "https://github.enterprise.local/org/repo",
+		"https://git.example.com/team@prod/repo.git":       "https://git.example.com/team@prod/repo.git",
+		"git@github.com:org/repo.git":                      "git@github.com:org/repo.git",
+	}
+	for input, want := range tests {
+		if got := sanitizeGitRemoteURL(input); got != want {
+			t.Fatalf("sanitizeGitRemoteURL(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestBuildHookEventRequestDoesNotEnrichNonPreToolUsePayloads(t *testing.T) {
 	t.Parallel()
 
@@ -539,7 +690,17 @@ func TestBuildHookEventRequestDoesNotEnrichNonPreToolUsePayloads(t *testing.T) {
 func runTestGit(t *testing.T, cwd string, args ...string) {
 	t.Helper()
 
-	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	gitPath, ok := trustedGitPath()
+	if !ok {
+		t.Skip("trusted git unavailable")
+	}
+	runTestGitPath(t, gitPath, cwd, args...)
+}
+
+func runTestGitPath(t *testing.T, gitPath, cwd string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(gitPath, append([]string{"-C", cwd}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)

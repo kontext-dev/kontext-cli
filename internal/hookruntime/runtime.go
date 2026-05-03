@@ -41,10 +41,6 @@ type Result struct {
 	UpdatedInput map[string]any
 }
 
-type Processor interface {
-	ProcessHookEvent(Event) (Result, error)
-}
-
 func EventFromAgent(agentName string, event *agent.HookEvent) Event {
 	if event == nil {
 		return Event{Agent: agentName}

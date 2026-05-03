@@ -17,6 +17,7 @@ import (
 
 	"github.com/cli/browser"
 
+	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/hooks/claudecode"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
@@ -146,14 +147,18 @@ func verifyClaudeCode() error {
 }
 
 func runHookCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "claude-code" {
-		return fmt.Errorf("usage: kontext guard hook claude-code")
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kontext guard hook <agent>")
 	}
-	return runHook(ctx, args[1:], stdin, stdout, stderr)
+	a, ok := agent.Get(args[0])
+	if !ok {
+		return fmt.Errorf("unsupported guard hook agent %q", args[0])
+	}
+	return runHook(ctx, args[0], a, args[1:], stdin, stdout, stderr)
 }
 
-func runHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("hook claude-code", flag.ContinueOnError)
+func runHook(ctx context.Context, agentName string, a agent.Agent, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("hook "+a.Name(), flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
 	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookruntime.ModeObserve)), "hook mode: observe or enforce")
@@ -164,7 +169,8 @@ func runHook(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if err != nil {
 		return err
 	}
-	return hookruntime.Run(ctx, hookruntime.ClaudeAdapter{}, claudecode.NewClient(*baseURL), hookMode, stdin, stdout, stderr)
+	adapter := hookruntime.AgentAdapter{Agent: a, AgentName: agentName}
+	return hookruntime.Run(ctx, adapter, claudecode.NewClient(*baseURL), hookMode, stdin, stdout, stderr)
 }
 
 func runStatus(ctx context.Context, args []string, out io.Writer) error {

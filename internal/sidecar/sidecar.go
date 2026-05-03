@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,14 @@ const (
 	heartbeatMaxInterval = 5 * time.Minute
 	hookEvalTimeout      = 4 * time.Second
 )
+
+var trustedGitSearchDirs = []string{
+	"/usr/bin",
+	"/bin",
+	"/usr/local/bin",
+	"/opt/homebrew/bin",
+	"/opt/local/bin",
+}
 
 type heartbeatState struct {
 	interval    time.Duration
@@ -250,7 +259,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 		}
 		return EvaluateResult{
 			Type:     "result",
-			Decision: string(hookruntime.DecisionDeny),
+			Decision: hookruntime.DecisionDeny,
 			Allowed:  false,
 			Reason:   "Kontext access policy could not be evaluated.",
 		}
@@ -260,7 +269,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 		if result.AccessMode == backend.HostedAccessModeEnforce {
 			return EvaluateResult{
 				Type:     "result",
-				Decision: string(hookruntime.DecisionDeny),
+				Decision: hookruntime.DecisionDeny,
 				Allowed:  false,
 				Reason:   "Kontext access policy mode could not be persisted.",
 				Mode:     string(result.AccessMode),
@@ -268,7 +277,22 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 		}
 	}
 
+	accessMode := result.AccessMode
+	if accessMode == "" {
+		accessMode = s.currentAccessMode()
+	}
 	resp := result.Response
+	if accessMode != backend.HostedAccessModeEnforce {
+		return resultFromRuntime(hookruntime.Result{
+			Decision:   hookruntime.DecisionAllow,
+			Reason:     resp.GetReason(),
+			ReasonCode: result.ReasonCode,
+			RequestID:  result.RequestID,
+			Mode:       string(accessMode),
+			Epoch:      result.PolicySetEpoch,
+		})
+	}
+
 	switch resp.GetDecision() {
 	case agentv1.Decision_DECISION_ALLOW:
 		runtimeResult := hookruntime.Result{
@@ -276,7 +300,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			Reason:     resp.GetReason(),
 			ReasonCode: result.ReasonCode,
 			RequestID:  result.RequestID,
-			Mode:       string(result.AccessMode),
+			Mode:       string(accessMode),
 			Epoch:      result.PolicySetEpoch,
 		}
 		return resultFromRuntime(runtimeResult)
@@ -286,7 +310,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			Reason:     resp.GetReason(),
 			ReasonCode: result.ReasonCode,
 			RequestID:  result.RequestID,
-			Mode:       string(result.AccessMode),
+			Mode:       string(accessMode),
 			Epoch:      result.PolicySetEpoch,
 		})
 	case agentv1.Decision_DECISION_DENY:
@@ -297,7 +321,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			Reason:     resp.GetReason(),
 			ReasonCode: result.ReasonCode,
 			RequestID:  result.RequestID,
-			Mode:       string(result.AccessMode),
+			Mode:       string(accessMode),
 			Epoch:      result.PolicySetEpoch,
 		})
 	}
@@ -310,7 +334,7 @@ func defaultAllowResult() EvaluateResult {
 func resultFromRuntime(result hookruntime.Result) EvaluateResult {
 	return EvaluateResult{
 		Type:         "result",
-		Decision:     string(result.Decision),
+		Decision:     result.Decision,
 		Allowed:      result.Allowed(),
 		Reason:       result.Reason,
 		ReasonCode:   result.ReasonCode,
@@ -388,7 +412,12 @@ func enrichToolInput(req *EvaluateRequest) []byte {
 }
 
 func collectGitContext(cwd string) (map[string]any, bool) {
-	root := strings.TrimSpace(runGit(cwd, "rev-parse", "--show-toplevel"))
+	gitPath, ok := trustedGitPath()
+	if !ok {
+		return nil, false
+	}
+
+	root := strings.TrimSpace(runGit(gitPath, cwd, "rev-parse", "--show-toplevel"))
 	if root == "" {
 		return nil, false
 	}
@@ -396,14 +425,14 @@ func collectGitContext(cwd string) (map[string]any, bool) {
 	git := map[string]any{
 		"worktreeRoot": root,
 	}
-	if branch := strings.TrimSpace(runGit(cwd, "rev-parse", "--abbrev-ref", "HEAD")); branch != "" && branch != "HEAD" {
+	if branch := strings.TrimSpace(runGit(gitPath, cwd, "rev-parse", "--abbrev-ref", "HEAD")); branch != "" && branch != "HEAD" {
 		git["branch"] = branch
 	}
 
-	remoteNames := strings.Fields(runGit(cwd, "remote"))
+	remoteNames := strings.Fields(runGit(gitPath, cwd, "remote"))
 	remotes := map[string]string{}
 	for _, name := range remoteNames {
-		remoteURL := strings.TrimSpace(runGit(cwd, "remote", "get-url", name))
+		remoteURL := strings.TrimSpace(runGit(gitPath, cwd, "remote", "get-url", name))
 		if remoteURL == "" {
 			continue
 		}
@@ -416,14 +445,26 @@ func collectGitContext(cwd string) (map[string]any, bool) {
 	return git, true
 }
 
-func runGit(cwd string, args ...string) string {
+func trustedGitPath() (string, bool) {
+	for _, dir := range trustedGitSearchDirs {
+		path := filepath.Join(dir, "git")
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return path, true
+	}
+	return "", false
+}
+
+func runGit(gitPath, cwd string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", cwd}, args...)...)
+	cmd := exec.CommandContext(ctx, gitPath, append([]string{"-C", cwd}, args...)...)
 	cmd.Env = []string{
 		"GIT_TERMINAL_PROMPT=0",
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + filepath.Dir(gitPath),
 		"HOME=" + os.Getenv("HOME"),
 	}
 	out, err := cmd.Output()
@@ -435,12 +476,14 @@ func runGit(cwd string, args ...string) string {
 
 func sanitizeGitRemoteURL(remoteURL string) string {
 	if strings.Contains(remoteURL, "://") {
-		parts := strings.SplitN(remoteURL, "://", 2)
-		rest := parts[1]
-		if at := strings.LastIndex(rest, "@"); at >= 0 && strings.Contains(rest[at+1:], "github.com") {
-			rest = rest[at+1:]
+		parsed, err := url.Parse(remoteURL)
+		if err != nil || parsed.Host == "" {
+			return remoteURL
 		}
-		return parts[0] + "://" + rest
+		if parsed.User != nil {
+			parsed.User = nil
+		}
+		return parsed.String()
 	}
 	return remoteURL
 }

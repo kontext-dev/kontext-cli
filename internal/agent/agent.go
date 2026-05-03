@@ -10,6 +10,10 @@ type Agent interface {
 	EncodeDeny(event *HookEvent, reason string) ([]byte, error)
 }
 
+type Aliaser interface {
+	Aliases() []string
+}
+
 type HookEvent struct {
 	SessionID      string
 	HookEventName  string
@@ -25,13 +29,22 @@ type HookEvent struct {
 }
 
 var registry = map[string]Agent{}
+var aliases = map[string]Agent{}
 
 func Register(a Agent) {
 	registry[a.Name()] = a
+	if aliaser, ok := a.(Aliaser); ok {
+		for _, alias := range aliaser.Aliases() {
+			aliases[alias] = a
+		}
+	}
 }
 
 func Get(name string) (Agent, bool) {
-	a, ok := registry[name]
+	if a, ok := registry[name]; ok {
+		return a, true
+	}
+	a, ok := aliases[name]
 	return a, ok
 }
 

@@ -13,6 +13,8 @@ type Claude struct{}
 
 func (c *Claude) Name() string { return "claude" }
 
+func (c *Claude) Aliases() []string { return []string{"claude-code"} }
+
 func (c *Claude) DecodeHookInput(input []byte) (*agent.HookEvent, error) {
 	event, err := hookruntime.DecodeClaudeEvent(input, c.Name())
 	if err != nil {

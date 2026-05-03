@@ -6,30 +6,36 @@ import (
 	"io"
 	"time"
 
+	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
-	sharedhook "github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
-type ClaudeAdapter struct{}
+type AgentAdapter struct {
+	Agent     agent.Agent
+	AgentName string
+}
 
-func (ClaudeAdapter) Decode(r io.Reader) (Event, error) {
+func (a AgentAdapter) Decode(r io.Reader) (Event, error) {
+	if a.Agent == nil {
+		return Event{}, errors.New("agent adapter missing agent")
+	}
 	input, err := io.ReadAll(r)
 	if err != nil {
 		return Event{}, err
 	}
-	sharedEvent, err := sharedhook.DecodeClaudeEvent(input, "claude-code")
+	agentEvent, err := a.Agent.DecodeHookInput(input)
 	if err != nil {
 		return Event{}, err
 	}
 	event := risk.HookEvent{
-		SessionID:     sharedEvent.SessionID,
-		Agent:         sharedEvent.Agent,
-		HookEventName: sharedEvent.HookEventName,
-		ToolName:      sharedEvent.ToolName,
-		ToolInput:     sharedEvent.ToolInput,
-		ToolResponse:  sharedEvent.ToolResponse,
-		ToolUseID:     sharedEvent.ToolUseID,
-		CWD:           sharedEvent.CWD,
+		SessionID:     agentEvent.SessionID,
+		Agent:         a.outputAgentName(),
+		HookEventName: agentEvent.HookEventName,
+		ToolName:      agentEvent.ToolName,
+		ToolInput:     agentEvent.ToolInput,
+		ToolResponse:  agentEvent.ToolResponse,
+		ToolUseID:     agentEvent.ToolUseID,
+		CWD:           agentEvent.CWD,
 		Timestamp:     time.Now().UTC(),
 	}
 	if event.HookEventName == "" {
@@ -45,20 +51,26 @@ func (ClaudeAdapter) Decode(r io.Reader) (Event, error) {
 	}, nil
 }
 
-func (ClaudeAdapter) Encode(out io.Writer, result Result) error {
-	decision := sharedhook.DecisionAllow
+func (a AgentAdapter) Encode(out io.Writer, result Result) error {
+	if a.Agent == nil {
+		return errors.New("agent adapter missing agent")
+	}
+	event := &agent.HookEvent{HookEventName: result.HookName}
+	reason := formatReason(result.Decision, result.Reason, result.Mode)
+	var (
+		payload []byte
+		err     error
+	)
 	if result.Mode == ModeEnforce && result.CanBlock {
 		switch result.Decision {
-		case risk.DecisionAsk:
-			decision = sharedhook.DecisionDeny
-		case risk.DecisionDeny:
-			decision = sharedhook.DecisionDeny
+		case risk.DecisionAsk, risk.DecisionDeny:
+			payload, err = a.Agent.EncodeDeny(event, reason)
+		default:
+			payload, err = a.Agent.EncodeAllow(event, reason, nil)
 		}
+	} else {
+		payload, err = a.Agent.EncodeAllow(event, reason, nil)
 	}
-	payload, err := sharedhook.EncodeClaudeResult(result.HookName, sharedhook.Result{
-		Decision: decision,
-		Reason:   formatReason(result.Decision, result.Reason, result.Mode),
-	})
 	if err != nil {
 		return err
 	}
@@ -66,8 +78,18 @@ func (ClaudeAdapter) Encode(out io.Writer, result Result) error {
 	return err
 }
 
-func (ClaudeAdapter) MalformedHookName() string {
+func (a AgentAdapter) MalformedHookName() string {
 	return "PreToolUse"
+}
+
+func (a AgentAdapter) outputAgentName() string {
+	if a.AgentName != "" {
+		return a.AgentName
+	}
+	if a.Agent != nil {
+		return a.Agent.Name()
+	}
+	return ""
 }
 
 func formatReason(decision risk.Decision, reason string, mode Mode) string {
@@ -80,4 +102,4 @@ func formatReason(decision risk.Decision, reason string, mode Mode) string {
 	return reason
 }
 
-var _ Adapter = ClaudeAdapter{}
+var _ Adapter = AgentAdapter{}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -248,7 +247,7 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 		return sidecarFailureResult(event, "sidecar read error"), nil
 	}
 
-	decision := hookruntime.Decision(result.Decision)
+	decision := result.Decision
 	if decision == "" {
 		decision = hookruntime.ResultFromBool(result.Allowed, result.Reason).Decision
 	}
@@ -264,19 +263,27 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 }
 
 func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Result {
-	if event.HookEventName == "PreToolUse" && currentHostedAccessMode() == "enforce" {
+	if event.HookEventName != "PreToolUse" {
+		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
+	}
+	if currentHostedAccessMode() == "enforce" {
 		return hookruntime.Result{Decision: hookruntime.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
 	return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
 }
 
 func currentHostedAccessMode() string {
-	if path := os.Getenv("KONTEXT_ACCESS_MODE_PATH"); path != "" {
-		if data, err := os.ReadFile(path); err == nil {
-			return strings.TrimSpace(string(data))
-		}
+	mode := os.Getenv("KONTEXT_ACCESS_MODE")
+	if mode == "disabled" || mode == "no_policy" {
+		return mode
 	}
-	return os.Getenv("KONTEXT_ACCESS_MODE")
+	if mode == "enforce" {
+		return "enforce"
+	}
+	if os.Getenv("KONTEXT_ACCESS_MODE_PATH") != "" {
+		return "enforce"
+	}
+	return mode
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)
