@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/kontext-security/kontext-cli/compare/v0.5.1...v0.6.0) (2026-05-03)
+
+
+### Features
+
+* add hosted hook sidecar transport ([#94](https://github.com/kontext-security/kontext-cli/issues/94)) ([22873e7](https://github.com/kontext-security/kontext-cli/commit/22873e79e648b36a7327903cb9415fac82a063f4))
+* share claude hook runtime ([#93](https://github.com/kontext-security/kontext-cli/issues/93)) ([500bc71](https://github.com/kontext-security/kontext-cli/commit/500bc71e4e779883e511177091eb2583ed269312))
+
 ## [0.5.1](https://github.com/kontext-security/kontext-cli/compare/v0.5.0...v0.5.1) (2026-05-01)
 
 
