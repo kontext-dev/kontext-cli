@@ -209,8 +209,8 @@ func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
 func TestEncodeClaudeResultMapsAskToAsk(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
-		Decision:  hookruntime.DecisionAsk,
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hook.Result{
+		Decision:  hook.DecisionAsk,
 		Reason:    "approval required",
 		RequestID: "req-123",
 	})
@@ -228,8 +228,8 @@ func TestEncodeClaudeResultMapsAskToAsk(t *testing.T) {
 func TestEncodeClaudeResultDoesNotDuplicateAskRequestID(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
-		Decision:  hookruntime.DecisionAsk,
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hook.Result{
+		Decision:  hook.DecisionAsk,
 		Reason:    "approval required. Request ID: req-123",
 		RequestID: "req-123",
 	})
@@ -247,8 +247,8 @@ func TestEncodeClaudeResultDoesNotDuplicateAskRequestID(t *testing.T) {
 func TestEncodeClaudeResultOmitsDecisionForPostToolUse(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PostToolUse", hookruntime.Result{
-		Decision: hookruntime.DecisionDeny,
+	out, err := hookruntime.EncodeClaudeResult("PostToolUse", hook.Result{
+		Decision: hook.DecisionDeny,
 		Reason:   "telemetry only",
 	})
 	if err != nil {

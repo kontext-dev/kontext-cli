@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 type ClaudeHookInput struct {
@@ -41,19 +43,19 @@ type claudeHookSpecificOutput struct {
 	UpdatedInput             map[string]any `json:"updatedInput,omitempty"`
 }
 
-func DecodeClaudeEvent(input []byte, agentName string) (Event, error) {
+func DecodeClaudeEvent(input []byte, agentName string) (hook.Event, error) {
 	var h ClaudeHookInput
 	if err := json.Unmarshal(input, &h); err != nil {
-		return Event{}, fmt.Errorf("claude: decode hook input: %w", err)
+		return hook.Event{}, fmt.Errorf("claude: decode hook input: %w", err)
 	}
 	hookName := firstString(h.HookEventName, h.HookEventNameAlt, h.HookEventLegacy)
 	if hookName == "" {
-		return Event{}, fmt.Errorf("claude: hook event name missing")
+		return hook.Event{}, fmt.Errorf("claude: hook event name missing")
 	}
-	return Event{
+	return hook.Event{
 		SessionID:      firstString(h.SessionID, h.SessionIDAlt),
 		Agent:          agentName,
-		HookName:       HookName(hookName),
+		HookName:       hook.HookName(hookName),
 		ToolName:       firstString(h.ToolName, h.ToolNameAlt),
 		ToolInput:      firstMap(h.ToolInput, h.ToolInputAlt),
 		ToolResponse:   firstMap(h.ToolResponse, h.ToolResponseAlt),
@@ -84,16 +86,16 @@ func firstMap(values ...map[string]any) map[string]any {
 	return nil
 }
 
-func EncodeClaudeResult(hookEventName string, result Result) ([]byte, error) {
-	if HookName(hookEventName) != HookPreToolUse {
+func EncodeClaudeResult(hookEventName string, result hook.Result) ([]byte, error) {
+	if hook.HookName(hookEventName) != hook.HookPreToolUse {
 		return json.Marshal(claudeHookOutput{SuppressOutput: true})
 	}
 
 	permissionDecision := string(result.Decision)
-	if permissionDecision != string(DecisionAllow) &&
-		permissionDecision != string(DecisionAsk) &&
-		permissionDecision != string(DecisionDeny) {
-		permissionDecision = string(DecisionDeny)
+	if permissionDecision != string(hook.DecisionAllow) &&
+		permissionDecision != string(hook.DecisionAsk) &&
+		permissionDecision != string(hook.DecisionDeny) {
+		permissionDecision = string(hook.DecisionDeny)
 	}
 	reason := result.ClaudeReason()
 	if permissionDecision == "allow" && strings.EqualFold(strings.TrimSpace(reason), "allowed") {
