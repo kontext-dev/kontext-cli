@@ -27,14 +27,14 @@ func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 	}
 
 	if event.ToolInput != nil {
-		data, err := hook.MarshalMap(event.ToolInput)
+		data, err := marshalMap(event.ToolInput)
 		if err != nil {
 			return EvaluateRequest{}, fmt.Errorf("marshal tool input: %w", err)
 		}
 		req.ToolInput = data
 	}
 	if event.ToolResponse != nil {
-		data, err := hook.MarshalMap(event.ToolResponse)
+		data, err := marshalMap(event.ToolResponse)
 		if err != nil {
 			return EvaluateRequest{}, fmt.Errorf("marshal tool response: %w", err)
 		}
@@ -100,7 +100,7 @@ func EvaluateResultFromResult(result hook.Result) EvaluateResult {
 func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 	decision, ok := hook.NormalizeDecision(result.Decision)
 	if !ok {
-		decision = hook.ResultFromBool(result.Allowed, result.Reason).Decision
+		decision = resultFromBool(result.Allowed).Decision
 	}
 	return hook.Result{
 		Decision:     decision,
@@ -111,6 +111,13 @@ func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 		Epoch:        result.Epoch,
 		UpdatedInput: result.UpdatedInput,
 	}
+}
+
+func resultFromBool(allowed bool) hook.Result {
+	if allowed {
+		return hook.Result{Decision: hook.DecisionAllow}
+	}
+	return hook.Result{Decision: hook.DecisionDeny}
 }
 
 func HookResultFromHostedResult(result *backend.ProcessHookEventResult, accessMode backend.HostedAccessMode) hook.Result {
@@ -144,6 +151,13 @@ func HookResultFromHostedResult(result *backend.ProcessHookEventResult, accessMo
 		out.Decision = hook.DecisionDeny
 	}
 	return out
+}
+
+func marshalMap(value map[string]any) (json.RawMessage, error) {
+	if value == nil {
+		return nil, nil
+	}
+	return json.Marshal(value)
 }
 
 func rawMap(data json.RawMessage) (map[string]any, error) {

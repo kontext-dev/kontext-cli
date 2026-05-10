@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -110,18 +111,6 @@ func TestAcceptLoopReturnsOnListenerError(t *testing.T) {
 
 	if got := ln.accepts; got != 1 {
 		t.Fatalf("Accept() calls = %d, want 1", got)
-	}
-}
-
-func TestDefaultAllowResultOmitsPlaceholderReason(t *testing.T) {
-	t.Parallel()
-
-	result := defaultAllowResult()
-	if !result.Allowed {
-		t.Fatal("defaultAllowResult().Allowed = false, want true")
-	}
-	if result.Reason != "" {
-		t.Fatalf("defaultAllowResult().Reason = %q, want empty", result.Reason)
 	}
 }
 
@@ -578,11 +567,13 @@ func TestBuildHookEventRequestPreservesTelemetryPayload(t *testing.T) {
 	toolResponse := json.RawMessage(`{"stdout":"/tmp/project"}`)
 	isInterrupt := true
 	durationMs := int64(42)
-	req := &EvaluateRequest{
-		HookEvent:      "PostToolUse",
+	event := hook.Event{
+		SessionID:      "session-123",
+		Agent:          "claude",
+		HookName:       hook.HookPostToolUse,
 		ToolName:       "Bash",
-		ToolInput:      toolInput,
-		ToolResponse:   toolResponse,
+		ToolInput:      map[string]any{"command": "pwd"},
+		ToolResponse:   map[string]any{"stdout": "/tmp/project"},
 		ToolUseID:      "toolu_123",
 		CWD:            "/tmp/project",
 		PermissionMode: "acceptEdits",
@@ -591,33 +582,29 @@ func TestBuildHookEventRequestPreservesTelemetryPayload(t *testing.T) {
 		IsInterrupt:    &isInterrupt,
 	}
 
-	got := buildHookEventRequest("session-123", "claude", req)
+	got := buildHookEventRequestFromEvent(event)
 	if got.SessionId != "session-123" ||
 		got.Agent != "claude" ||
-		got.HookEvent != req.HookEvent ||
-		got.ToolName != req.ToolName ||
-		got.ToolUseId != req.ToolUseID ||
-		got.Cwd != req.CWD {
+		got.HookEvent != event.HookName.String() ||
+		got.ToolName != event.ToolName ||
+		got.ToolUseId != event.ToolUseID ||
+		got.Cwd != event.CWD {
 		t.Fatalf("buildHookEventRequest() = %+v, want copied metadata", got)
 	}
-	if got.GetPermissionMode() != req.PermissionMode {
-		t.Fatalf("PermissionMode = %q, want %q", got.GetPermissionMode(), req.PermissionMode)
+	if got.GetPermissionMode() != event.PermissionMode {
+		t.Fatalf("PermissionMode = %q, want %q", got.GetPermissionMode(), event.PermissionMode)
 	}
-	if got.GetDurationMs() != *req.DurationMs {
-		t.Fatalf("DurationMs = %d, want %d", got.GetDurationMs(), *req.DurationMs)
+	if got.GetDurationMs() != *event.DurationMs {
+		t.Fatalf("DurationMs = %d, want %d", got.GetDurationMs(), *event.DurationMs)
 	}
-	if got.GetError() != req.Error {
-		t.Fatalf("Error = %q, want %q", got.GetError(), req.Error)
+	if got.GetError() != event.Error {
+		t.Fatalf("Error = %q, want %q", got.GetError(), event.Error)
 	}
-	if got.GetIsInterrupt() != *req.IsInterrupt {
-		t.Fatalf("IsInterrupt = %t, want %t", got.GetIsInterrupt(), *req.IsInterrupt)
+	if got.GetIsInterrupt() != *event.IsInterrupt {
+		t.Fatalf("IsInterrupt = %t, want %t", got.GetIsInterrupt(), *event.IsInterrupt)
 	}
-	if string(got.ToolInput) != string(toolInput) {
-		t.Fatalf("ToolInput = %s, want %s", got.ToolInput, toolInput)
-	}
-	if string(got.ToolResponse) != string(toolResponse) {
-		t.Fatalf("ToolResponse = %s, want %s", got.ToolResponse, toolResponse)
-	}
+	assertJSONEqual(t, got.ToolInput, toolInput)
+	assertJSONEqual(t, got.ToolResponse, toolResponse)
 }
 
 func TestBuildHookEventRequestEnrichesBashPreToolUseWithGitContext(t *testing.T) {
@@ -636,11 +623,13 @@ func TestBuildHookEventRequestEnrichesBashPreToolUseWithGitContext(t *testing.T)
 	runTestGit(t, repoDir, "-c", "user.name=Kontext Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
 	runTestGit(t, repoDir, "remote", "add", "origin", "https://token:x-oauth-basic@github.com/kontext-security/kontext-cli.git")
 
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent: "PreToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID: "session-123",
+		Agent:     "claude",
+		HookName:  hook.HookPreToolUse,
 		ToolName:  "Bash",
 		CWD:       repoDir,
-		ToolInput: json.RawMessage(`{"command":"git push --dry-run origin HEAD:test-kontext-access-smoke"}`),
+		ToolInput: map[string]any{"command": "git push --dry-run origin HEAD:test-kontext-access-smoke"},
 	})
 
 	var input map[string]any
@@ -682,11 +671,13 @@ func TestBuildHookEventRequestUsesTrustedGitExecutableForContext(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent: "PreToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID: "session-123",
+		Agent:     "claude",
+		HookName:  hook.HookPreToolUse,
 		ToolName:  "Bash",
 		CWD:       repoDir,
-		ToolInput: json.RawMessage(`{"command":"git status"}`),
+		ToolInput: map[string]any{"command": "git status"},
 	})
 
 	var input map[string]any
@@ -724,16 +715,16 @@ func TestBuildHookEventRequestDoesNotEnrichNonPreToolUsePayloads(t *testing.T) {
 	t.Parallel()
 
 	toolInput := json.RawMessage(`{"command":"git push origin main"}`)
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent: "PostToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID: "session-123",
+		Agent:     "claude",
+		HookName:  hook.HookPostToolUse,
 		ToolName:  "Bash",
 		CWD:       t.TempDir(),
-		ToolInput: toolInput,
+		ToolInput: map[string]any{"command": "git push origin main"},
 	})
 
-	if string(got.ToolInput) != string(toolInput) {
-		t.Fatalf("ToolInput = %s, want unchanged %s", got.ToolInput, toolInput)
-	}
+	assertJSONEqual(t, got.ToolInput, toolInput)
 }
 
 func runTestGit(t *testing.T, cwd string, args ...string) {
@@ -760,8 +751,10 @@ func TestBuildHookEventRequestPreservesExplicitFalseInterrupt(t *testing.T) {
 	t.Parallel()
 
 	isInterrupt := false
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent:   "PostToolUseFailure",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID:   "session-123",
+		Agent:       "claude",
+		HookName:    hook.HookPostToolUseFailed,
 		ToolName:    "Bash",
 		ToolUseID:   "toolu_123",
 		IsInterrupt: &isInterrupt,
@@ -779,8 +772,10 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	t.Parallel()
 
 	durationMs := int64(0)
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent:  "PostToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID:  "session-123",
+		Agent:      "claude",
+		HookName:   hook.HookPostToolUse,
 		ToolName:   "Bash",
 		ToolUseID:  "toolu_123",
 		DurationMs: &durationMs,
@@ -791,6 +786,22 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	}
 	if got.GetDurationMs() != 0 {
 		t.Fatalf("DurationMs = %d, want 0", got.GetDurationMs())
+	}
+}
+
+func assertJSONEqual(t *testing.T, got, want []byte) {
+	t.Helper()
+
+	var gotValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("got JSON = %s: %v", got, err)
+	}
+	var wantValue any
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("want JSON = %s: %v", want, err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("JSON = %s, want %s", got, want)
 	}
 }
 

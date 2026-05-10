@@ -308,30 +308,8 @@ func (s *Server) evaluateHook(ctx context.Context, event hook.Event) hook.Result
 	return HookResultFromHostedResult(result, accessMode)
 }
 
-func defaultAllowResult() EvaluateResult {
-	return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
-}
-
 func (s *Server) processHostedHookEvent(ctx context.Context, event hook.Event) (*backend.ProcessHookEventResult, error) {
 	return s.client.ProcessHookEvent(ctx, buildHookEventRequestFromEvent(event))
-}
-
-func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {
-	event, err := EventFromEvaluateRequest(sessionID, agentName, req)
-	if err != nil {
-		if req == nil {
-			return &agentv1.ProcessHookEventRequest{SessionId: sessionID, Agent: agentName}
-		}
-		return &agentv1.ProcessHookEventRequest{
-			SessionId: sessionID,
-			Agent:     agentName,
-			HookEvent: req.HookEvent,
-			ToolName:  req.ToolName,
-			ToolUseId: req.ToolUseID,
-			Cwd:       req.CWD,
-		}
-	}
-	return buildHookEventRequestFromEvent(event)
 }
 
 func buildHookEventRequestFromEvent(event hook.Event) *agentv1.ProcessHookEventRequest {
@@ -360,7 +338,7 @@ func buildHookEventRequestFromEvent(event hook.Event) *agentv1.ProcessHookEventR
 		hookEvent.ToolInput = enrichToolInput(event)
 	}
 	if event.ToolResponse != nil {
-		hookEvent.ToolResponse, _ = hook.MarshalMap(event.ToolResponse)
+		hookEvent.ToolResponse, _ = marshalMap(event.ToolResponse)
 	}
 
 	return hookEvent
@@ -368,7 +346,7 @@ func buildHookEventRequestFromEvent(event hook.Event) *agentv1.ProcessHookEventR
 
 func enrichToolInput(event hook.Event) []byte {
 	input := cloneMap(event.ToolInput)
-	data, err := hook.MarshalMap(input)
+	data, err := marshalMap(input)
 	if err != nil {
 		return nil
 	}

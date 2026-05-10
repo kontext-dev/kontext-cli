@@ -183,9 +183,6 @@ func hookCmd() *cobra.Command {
 
 			socketPath := os.Getenv("KONTEXT_SOCKET")
 			hookcmd.Run(a, func(e hook.Event) (hook.Result, error) {
-				if e.Agent == "" {
-					e.Agent = agentName
-				}
 				return evaluateHookWithSidecar(socketPath, e)
 			})
 			return nil
