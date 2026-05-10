@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
+	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
@@ -85,6 +87,65 @@ func TestEventFromEvaluateRequestPreservesHookFields(t *testing.T) {
 		event.IsInterrupt == nil ||
 		*event.IsInterrupt {
 		t.Fatalf("event = %+v, want request fields preserved", event)
+	}
+}
+
+func TestEventFromEvaluateRequestRejectsMissingHookEvent(t *testing.T) {
+	t.Parallel()
+
+	_, err := EventFromEvaluateRequest("session-123", "claude", &EvaluateRequest{ToolName: "Bash"})
+	if err == nil {
+		t.Fatal("EventFromEvaluateRequest() error = nil, want missing hook event error")
+	}
+}
+
+func TestEventFromEvaluateRequestRejectsUnknownHookEvent(t *testing.T) {
+	t.Parallel()
+
+	_, err := EventFromEvaluateRequest("session-123", "claude", &EvaluateRequest{HookEvent: "pretooluse", ToolName: "Bash"})
+	if err == nil {
+		t.Fatal("EventFromEvaluateRequest() error = nil, want unknown hook event error")
+	}
+}
+
+func TestEventFromEvaluateRequestPreservesLargeJSONNumbers(t *testing.T) {
+	t.Parallel()
+
+	event, err := EventFromEvaluateRequest("session-123", "claude", &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"id":9007199254740993}`),
+	})
+	if err != nil {
+		t.Fatalf("EventFromEvaluateRequest() error = %v", err)
+	}
+	got, ok := event.ToolInput["id"].(json.Number)
+	if !ok {
+		t.Fatalf("id type = %T, want json.Number", event.ToolInput["id"])
+	}
+	if got.String() != "9007199254740993" {
+		t.Fatalf("id = %s, want exact large number", got.String())
+	}
+}
+
+func TestHookResultFromHostedResultMapsProtoDecision(t *testing.T) {
+	t.Parallel()
+
+	result := HookResultFromHostedResult(&backend.ProcessHookEventResult{
+		Response: &agentv1.ProcessHookEventResponse{
+			Decision: agentv1.Decision_DECISION_ASK,
+			Reason:   "approval required",
+		},
+		ReasonCode:     "needs_approval",
+		RequestID:      "req-123",
+		PolicySetEpoch: "epoch-1",
+	}, backend.HostedAccessModeEnforce)
+
+	if result.Decision != hook.DecisionAsk {
+		t.Fatalf("decision = %q, want ask", result.Decision)
+	}
+	if result.ReasonCode != "needs_approval" || result.RequestID != "req-123" || result.Epoch != "epoch-1" {
+		t.Fatalf("result metadata = %+v, want hosted metadata preserved", result)
 	}
 }
 

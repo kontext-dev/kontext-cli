@@ -15,7 +15,7 @@ import (
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 // sidecarClient is the backend surface used by the sidecar.
@@ -204,8 +204,12 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
-	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
-	result, err := s.client.ProcessHookEvent(ctx, hookEvent)
+	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	if err != nil {
+		s.diagnostic.Printf("sidecar ingest decode: %v\n", err)
+		return
+	}
+	result, err := s.processHostedHookEvent(ctx, event)
 	if err != nil {
 		s.diagnostic.Printf("sidecar ingest: %v\n", err)
 		return
@@ -238,38 +242,62 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 }
 
 func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateResult {
-	if req.HookEvent != "PreToolUse" {
-		return defaultAllowResult()
+	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	if err != nil {
+		s.diagnostic.Printf("sidecar evaluate decode: %v\n", err)
+		return EvaluateResultFromResult(sidecarDecodeFailureResult(req))
+	}
+	return EvaluateResultFromResult(s.evaluateHook(ctx, event))
+}
+
+func sidecarDecodeFailureResult(req *EvaluateRequest) hook.Result {
+	if req != nil {
+		hookName, ok := normalizeHookName(req.HookEvent)
+		if ok && !hookName.CanBlock() {
+			return hook.Result{
+				Decision: hook.DecisionAllow,
+				Reason:   "Kontext hook event could not be decoded.",
+			}
+		}
+	}
+	return hook.Result{
+		Decision: hook.DecisionDeny,
+		Reason:   "Kontext hook event could not be decoded.",
+	}
+}
+
+func (s *Server) evaluateHook(ctx context.Context, event hook.Event) hook.Result {
+	if event.HookName != hook.HookPreToolUse {
+		return hook.Result{Decision: hook.DecisionAllow}
 	}
 
-	hookEvent := buildHookEventRequest(s.sessionID, s.agentName, req)
 	evalCtx, cancel := context.WithTimeout(ctx, hookEvalTimeout)
 	defer cancel()
 
-	result, err := s.client.ProcessHookEvent(evalCtx, hookEvent)
+	result, err := s.processHostedHookEvent(evalCtx, event)
 	if err != nil {
 		s.diagnostic.Printf("sidecar enforce: %v\n", err)
 		accessMode := s.currentAccessMode()
 		if accessMode != backend.HostedAccessModeEnforce {
-			return EvaluateResultFromResult(hookruntime.Result{
-				Decision: hookruntime.DecisionAllow,
+			return hook.Result{
+				Decision: hook.DecisionAllow,
 				Reason:   "Kontext hosted access is not enforcing.",
 				Mode:     string(accessMode),
-			})
+			}
 		}
-		return EvaluateResultFromResult(hookruntime.Result{
-			Decision: hookruntime.DecisionDeny,
+		return hook.Result{
+			Decision: hook.DecisionDeny,
 			Reason:   "Kontext access policy could not be evaluated.",
-		})
+		}
 	}
 	if err := s.refreshAccessMode(result.AccessMode); err != nil {
 		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
 		if result.AccessMode == backend.HostedAccessModeEnforce {
-			return EvaluateResultFromResult(hookruntime.Result{
-				Decision: hookruntime.DecisionDeny,
+			return hook.Result{
+				Decision: hook.DecisionDeny,
 				Reason:   "Kontext access policy mode could not be persisted.",
 				Mode:     string(result.AccessMode),
-			})
+			}
 		}
 	}
 
@@ -277,106 +305,85 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 	if accessMode == "" {
 		accessMode = s.currentAccessMode()
 	}
-	resp := result.Response
-	if accessMode != backend.HostedAccessModeEnforce {
-		return EvaluateResultFromResult(hookruntime.Result{
-			Decision:   hookruntime.DecisionAllow,
-			Reason:     resp.GetReason(),
-			ReasonCode: result.ReasonCode,
-			RequestID:  result.RequestID,
-			Mode:       string(accessMode),
-			Epoch:      result.PolicySetEpoch,
-		})
-	}
-
-	switch resp.GetDecision() {
-	case agentv1.Decision_DECISION_ALLOW:
-		runtimeResult := hookruntime.Result{
-			Decision:   hookruntime.DecisionAllow,
-			Reason:     resp.GetReason(),
-			ReasonCode: result.ReasonCode,
-			RequestID:  result.RequestID,
-			Mode:       string(accessMode),
-			Epoch:      result.PolicySetEpoch,
-		}
-		return EvaluateResultFromResult(runtimeResult)
-	case agentv1.Decision_DECISION_ASK:
-		return EvaluateResultFromResult(hookruntime.Result{
-			Decision:   hookruntime.DecisionAsk,
-			Reason:     resp.GetReason(),
-			ReasonCode: result.ReasonCode,
-			RequestID:  result.RequestID,
-			Mode:       string(accessMode),
-			Epoch:      result.PolicySetEpoch,
-		})
-	case agentv1.Decision_DECISION_DENY:
-		fallthrough
-	default:
-		return EvaluateResultFromResult(hookruntime.Result{
-			Decision:   hookruntime.DecisionDeny,
-			Reason:     resp.GetReason(),
-			ReasonCode: result.ReasonCode,
-			RequestID:  result.RequestID,
-			Mode:       string(accessMode),
-			Epoch:      result.PolicySetEpoch,
-		})
-	}
+	return HookResultFromHostedResult(result, accessMode)
 }
 
 func defaultAllowResult() EvaluateResult {
-	return EvaluateResultFromResult(hookruntime.Result{Decision: hookruntime.DecisionAllow})
+	return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
+}
+
+func (s *Server) processHostedHookEvent(ctx context.Context, event hook.Event) (*backend.ProcessHookEventResult, error) {
+	return s.client.ProcessHookEvent(ctx, buildHookEventRequestFromEvent(event))
 }
 
 func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {
+	event, err := EventFromEvaluateRequest(sessionID, agentName, req)
+	if err != nil {
+		if req == nil {
+			return &agentv1.ProcessHookEventRequest{SessionId: sessionID, Agent: agentName}
+		}
+		return &agentv1.ProcessHookEventRequest{
+			SessionId: sessionID,
+			Agent:     agentName,
+			HookEvent: req.HookEvent,
+			ToolName:  req.ToolName,
+			ToolUseId: req.ToolUseID,
+			Cwd:       req.CWD,
+		}
+	}
+	return buildHookEventRequestFromEvent(event)
+}
+
+func buildHookEventRequestFromEvent(event hook.Event) *agentv1.ProcessHookEventRequest {
 	hookEvent := &agentv1.ProcessHookEventRequest{
-		SessionId: sessionID,
-		Agent:     agentName,
-		HookEvent: req.HookEvent,
-		ToolName:  req.ToolName,
-		ToolUseId: req.ToolUseID,
-		Cwd:       req.CWD,
+		SessionId: event.SessionID,
+		Agent:     event.Agent,
+		HookEvent: event.HookName.String(),
+		ToolName:  event.ToolName,
+		ToolUseId: event.ToolUseID,
+		Cwd:       event.CWD,
 	}
-	if req.PermissionMode != "" {
-		hookEvent.PermissionMode = &req.PermissionMode
+	if event.PermissionMode != "" {
+		hookEvent.PermissionMode = &event.PermissionMode
 	}
-	if req.DurationMs != nil {
-		hookEvent.DurationMs = req.DurationMs
+	if event.DurationMs != nil {
+		hookEvent.DurationMs = event.DurationMs
 	}
-	if req.Error != "" {
-		hookEvent.Error = &req.Error
+	if event.Error != "" {
+		hookEvent.Error = &event.Error
 	}
-	if req.IsInterrupt != nil {
-		hookEvent.IsInterrupt = req.IsInterrupt
+	if event.IsInterrupt != nil {
+		hookEvent.IsInterrupt = event.IsInterrupt
 	}
 
-	if len(req.ToolInput) > 0 {
-		hookEvent.ToolInput = enrichToolInput(req)
+	if event.ToolInput != nil {
+		hookEvent.ToolInput = enrichToolInput(event)
 	}
-	if len(req.ToolResponse) > 0 {
-		hookEvent.ToolResponse = req.ToolResponse
+	if event.ToolResponse != nil {
+		hookEvent.ToolResponse, _ = hook.MarshalMap(event.ToolResponse)
 	}
 
 	return hookEvent
 }
 
-func enrichToolInput(req *EvaluateRequest) []byte {
-	if req.HookEvent != "PreToolUse" || req.ToolName != "Bash" || req.CWD == "" || len(req.ToolInput) == 0 {
-		return req.ToolInput
+func enrichToolInput(event hook.Event) []byte {
+	input := cloneMap(event.ToolInput)
+	data, err := hook.MarshalMap(input)
+	if err != nil {
+		return nil
 	}
-
-	var input map[string]any
-	if err := json.Unmarshal(req.ToolInput, &input); err != nil {
-		return req.ToolInput
+	if event.HookName != hook.HookPreToolUse || event.ToolName != "Bash" || event.CWD == "" || len(input) == 0 {
+		return data
 	}
 	if _, ok := input["command"].(string); !ok {
 		if _, ok := input["cmd"].(string); !ok {
-			return req.ToolInput
+			return data
 		}
 	}
 
-	gitContext, ok := collectGitContext(req.CWD)
+	gitContext, ok := collectGitContext(event.CWD)
 	if !ok {
-		return req.ToolInput
+		return data
 	}
 
 	kontext, _ := input["kontext"].(map[string]any)
@@ -386,11 +393,22 @@ func enrichToolInput(req *EvaluateRequest) []byte {
 	kontext["git"] = gitContext
 	input["kontext"] = kontext
 
-	data, err := json.Marshal(input)
+	data, err = json.Marshal(input)
 	if err != nil {
-		return req.ToolInput
+		return nil
 	}
 	return data
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }
 
 func collectGitContext(cwd string) (map[string]any, bool) {

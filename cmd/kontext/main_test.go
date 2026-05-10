@@ -173,7 +173,12 @@ func TestEvaluateViaSidecarFailsClosedWhenAccessModePathSet(t *testing.T) {
 
 func TestEvaluateViaSidecarFailsOpenWhenNoPolicyModePathSet(t *testing.T) {
 	t.Setenv("KONTEXT_ACCESS_MODE", "no_policy")
-	t.Setenv("KONTEXT_ACCESS_MODE_PATH", "/tmp/kontext-missing-mode")
+	modePath := fmt.Sprintf("/tmp/kontext-mode-%d", time.Now().UnixNano())
+	if err := os.WriteFile(modePath, []byte("no_policy\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(modePath) })
+	t.Setenv("KONTEXT_ACCESS_MODE_PATH", modePath)
 
 	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
 	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
@@ -189,10 +194,10 @@ func TestEvaluateViaSidecarFailsOpenWhenNoPolicyModePathSet(t *testing.T) {
 	}
 }
 
-func TestEvaluateViaSidecarDoesNotTrustAccessModePathContents(t *testing.T) {
-	t.Setenv("KONTEXT_ACCESS_MODE", "enforce")
+func TestEvaluateViaSidecarUsesRefreshedEnforceModeFromPath(t *testing.T) {
+	t.Setenv("KONTEXT_ACCESS_MODE", "no_policy")
 	modePath := fmt.Sprintf("/tmp/kontext-mode-%d", time.Now().UnixNano())
-	if err := os.WriteFile(modePath, []byte("no_policy\n"), 0o600); err != nil {
+	if err := os.WriteFile(modePath, []byte("enforce\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(modePath) })
@@ -212,6 +217,29 @@ func TestEvaluateViaSidecarDoesNotTrustAccessModePathContents(t *testing.T) {
 	}
 	if result.Mode != "enforce" {
 		t.Fatalf("mode = %q, want enforce", result.Mode)
+	}
+}
+
+func TestEvaluateViaSidecarUsesRefreshedNoPolicyModeFromPath(t *testing.T) {
+	t.Setenv("KONTEXT_ACCESS_MODE", "enforce")
+	modePath := fmt.Sprintf("/tmp/kontext-mode-%d", time.Now().UnixNano())
+	if err := os.WriteFile(modePath, []byte("no_policy\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(modePath) })
+	t.Setenv("KONTEXT_ACCESS_MODE_PATH", modePath)
+
+	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
+	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
+	})
+	if err != nil {
+		t.Fatalf("evaluateViaSidecar() error = %v", err)
+	}
+	if result.Decision != hookruntime.DecisionAllow {
+		t.Fatalf("decision = %q, want ALLOW", result.Decision)
 	}
 }
 
