@@ -1,0 +1,113 @@
+{
+  "max_depth": 2,
+  "alphabet": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "smoother": {
+    "type": "laplace",
+    "alpha": 0.5
+  },
+  "contexts": [
+    {
+      "total": 120,
+      "next": [
+        {
+          "symbol": 1,
+          "count": 20
+        },
+        {
+          "symbol": 2,
+          "count": 40
+        },
+        {
+          "symbol": 3,
+          "count": 20
+        },
+        {
+          "symbol": 4,
+          "count": 20
+        },
+        {
+          "symbol": 5,
+          "count": 20
+        }
+      ]
+    },
+    {
+      "context": [
+        1
+      ],
+      "total": 20,
+      "next": [
+        {
+          "symbol": 2,
+          "count": 20
+        }
+      ]
+    },
+    {
+      "context": [
+        2
+      ],
+      "total": 40,
+      "next": [
+        {
+          "symbol": 3,
+          "count": 20
+        },
+        {
+          "symbol": 5,
+          "count": 20
+        }
+      ]
+    },
+    {
+      "context": [
+        4
+      ],
+      "total": 20,
+      "next": [
+        {
+          "symbol": 2,
+          "count": 20
+        }
+      ]
+    },
+    {
+      "context": [
+        1,
+        2
+      ],
+      "total": 20,
+      "next": [
+        {
+          "symbol": 3,
+          "count": 20
+        }
+      ],
+      "fallback": [
+        2
+      ]
+    },
+    {
+      "context": [
+        4,
+        2
+      ],
+      "total": 20,
+      "next": [
+        {
+          "symbol": 5,
+          "count": 20
+        }
+      ],
+      "fallback": [
+        2
+      ]
+    }
+  ]
+}

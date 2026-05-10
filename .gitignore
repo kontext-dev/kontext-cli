@@ -14,3 +14,4 @@ data/
 *.sqlite
 *.sqlite3
 models/generated/
+bench-results/
