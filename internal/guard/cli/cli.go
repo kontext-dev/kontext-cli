@@ -25,6 +25,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/guard/trace"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 const (
@@ -445,6 +446,17 @@ func mergeHooks(raw any, hookCommand string) map[string]any {
 				}
 			}
 		}
+		if len(list) == 0 {
+			delete(hooks, hookName)
+			continue
+		}
+		hooks[hookName] = list
+	}
+	for _, hookName := range []string{"PreToolUse", "PostToolUse"} {
+		var list []any
+		if existing, ok := hooks[hookName].([]any); ok {
+			list = append(list, existing...)
+		}
 		list = append(list, map[string]any{
 			"matcher": "*",
 			"hooks": []any{
@@ -495,14 +507,14 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 	client := claudecode.NewClient("http://" + listener.Addr().String())
 	cases := []struct {
 		name string
-		ev   risk.HookEvent
-		want risk.Decision
+		ev   hook.Event
+		want hook.Decision
 	}{
-		{"safe read", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"file_path": "README.md"}}, risk.DecisionAllow},
-		{"env read", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, risk.DecisionAsk},
-		{"cat env", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, risk.DecisionAsk},
-		{"provider token", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, risk.DecisionDeny},
-		{"drop database", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, risk.DecisionDeny},
+		{"safe read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": "README.md"}}, hook.DecisionAllow},
+		{"env read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, hook.DecisionAsk},
+		{"cat env", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, hook.DecisionAsk},
+		{"provider token", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, hook.DecisionDeny},
+		{"drop database", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, hook.DecisionDeny},
 	}
 	for _, item := range cases {
 		result, err := client.Process(ctx, item.ev)
