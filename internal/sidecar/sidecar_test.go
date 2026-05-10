@@ -238,8 +238,8 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeClaudeResult() error = %v", err)
 	}
-	if !strings.Contains(string(claudeOutput), `"permissionDecision":"deny"`) {
-		t.Fatalf("claude output = %s, want deny", claudeOutput)
+	if !strings.Contains(string(claudeOutput), `"permissionDecision":"ask"`) {
+		t.Fatalf("claude output = %s, want ask", claudeOutput)
 	}
 	if strings.Count(string(claudeOutput), "Request ID: request-123") != 1 {
 		t.Fatalf("claude output = %s, want one request id", claudeOutput)

@@ -2,107 +2,38 @@ package hookruntime
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
-type Decision string
+type HookName = hook.HookName
 
 const (
-	DecisionAllow Decision = "ALLOW"
-	DecisionAsk   Decision = "ASK"
-	DecisionDeny  Decision = "DENY"
+	HookPreToolUse        = hook.HookPreToolUse
+	HookPostToolUse       = hook.HookPostToolUse
+	HookPostToolUseFailed = hook.HookPostToolUseFailed
+	HookUserPromptSubmit  = hook.HookUserPromptSubmit
 )
 
-type Event struct {
-	SessionID      string
-	Agent          string
-	HookEventName  string
-	ToolName       string
-	ToolInput      map[string]any
-	ToolResponse   map[string]any
-	ToolUseID      string
-	CWD            string
-	PermissionMode string
-	DurationMs     *int64
-	Error          string
-	IsInterrupt    *bool
-}
+type Decision = hook.Decision
 
-type Result struct {
-	Decision     Decision
-	Reason       string
-	ReasonCode   string
-	RequestID    string
-	Mode         string
-	Epoch        string
-	UpdatedInput map[string]any
-}
+const (
+	DecisionAllow = hook.DecisionAllow
+	DecisionAsk   = hook.DecisionAsk
+	DecisionDeny  = hook.DecisionDeny
+)
 
-func EventFromAgent(agentName string, event *agent.HookEvent) Event {
-	if event == nil {
-		return Event{Agent: agentName}
-	}
-	return Event{
-		SessionID:      event.SessionID,
-		Agent:          agentName,
-		HookEventName:  event.HookEventName,
-		ToolName:       event.ToolName,
-		ToolInput:      event.ToolInput,
-		ToolResponse:   event.ToolResponse,
-		ToolUseID:      event.ToolUseID,
-		CWD:            event.CWD,
-		PermissionMode: event.PermissionMode,
-		DurationMs:     event.DurationMs,
-		Error:          event.Error,
-		IsInterrupt:    event.IsInterrupt,
-	}
-}
+type Event = hook.Event
+type Result = hook.Result
 
 func ResultFromBool(allowed bool, reason string) Result {
-	if allowed {
-		return Result{Decision: DecisionAllow, Reason: reason}
-	}
-	return Result{Decision: DecisionDeny, Reason: reason}
+	return hook.ResultFromBool(allowed, reason)
 }
 
-func (r Result) Allowed() bool {
-	return r.Decision == DecisionAllow
-}
-
-func (r Result) ClaudeReason() string {
-	reason := r.Reason
-	if r.Decision == DecisionAsk && r.RequestID != "" {
-		if reason != "" {
-			if containsRequestID(reason) {
-				return reason
-			}
-			return fmt.Sprintf("%s Request ID: %s", reason, r.RequestID)
-		}
-		return fmt.Sprintf("Kontext access policy requires approval. Request ID: %s", r.RequestID)
-	}
-	if reason == "" && r.Decision == DecisionAsk {
-		return "Kontext access policy requires approval."
-	}
-	if reason == "" && r.Decision == DecisionDeny {
-		return "Blocked by Kontext access policy."
-	}
-	return reason
-}
-
-func containsRequestID(reason string) bool {
-	return strings.Contains(strings.ToLower(reason), "request id")
+func NormalizeDecision(value string) (Decision, bool) {
+	return hook.NormalizeDecision(value)
 }
 
 func MarshalMap(value map[string]any) (json.RawMessage, error) {
-	if value == nil {
-		return nil, nil
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return hook.MarshalMap(value)
 }

@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-func TestRunWritesBlockedReasonToStderr(t *testing.T) {
+func TestRunWritesStructuredDenyResult(t *testing.T) {
 	t.Parallel()
 
 	codec := stubCodec{
-		event: Event{HookEventName: "PreToolUse"},
+		event: Event{HookName: HookPreToolUse},
 		out:   []byte(`{"hookSpecificOutput":{"permissionDecision":"deny"}}`),
 	}
 	stdout := &bytes.Buffer{}
@@ -25,23 +25,23 @@ func TestRunWritesBlockedReasonToStderr(t *testing.T) {
 		}),
 	)
 
-	if code != 2 {
-		t.Fatalf("Run() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0", code)
 	}
 	if stdout.String() != string(codec.out) {
 		t.Fatalf("stdout = %q, want encoded output", stdout.String())
 	}
-	if stderr.String() != "blocked by policy\n" {
-		t.Fatalf("stderr = %q, want blocked reason", stderr.String())
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 
-func TestRunBlocksForAskDecision(t *testing.T) {
+func TestRunWritesStructuredAskResult(t *testing.T) {
 	t.Parallel()
 
 	codec := stubCodec{
-		event: Event{HookEventName: "PreToolUse"},
-		out:   []byte(`{"hookSpecificOutput":{"permissionDecision":"deny"}}`),
+		event: Event{HookName: HookPreToolUse},
+		out:   []byte(`{"hookSpecificOutput":{"permissionDecision":"ask"}}`),
 	}
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -56,14 +56,14 @@ func TestRunBlocksForAskDecision(t *testing.T) {
 		}),
 	)
 
-	if code != 2 {
-		t.Fatalf("Run() exit code = %d, want 2", code)
+	if code != 0 {
+		t.Fatalf("Run() exit code = %d, want 0", code)
 	}
 	if stdout.String() != string(codec.out) {
 		t.Fatalf("stdout = %q, want encoded output", stdout.String())
 	}
-	if stderr.String() != "approval required\n" {
-		t.Fatalf("stderr = %q, want approval reason", stderr.String())
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 

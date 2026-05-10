@@ -48,11 +48,5 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, codec Codec, sink Sink) int 
 		fmt.Fprintf(stderr, "kontext: failed to write hook output: %v\n", err)
 		return 2
 	}
-	if result.Decision == DecisionAsk || result.Decision == DecisionDeny {
-		if reason := result.ClaudeReason(); reason != "" {
-			fmt.Fprintln(stderr, reason)
-		}
-		return 2
-	}
 	return 0
 }
