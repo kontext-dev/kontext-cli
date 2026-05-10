@@ -251,29 +251,25 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 		s.diagnostic.Printf("sidecar enforce: %v\n", err)
 		accessMode := s.currentAccessMode()
 		if accessMode != backend.HostedAccessModeEnforce {
-			return resultFromRuntime(hookruntime.Result{
+			return EvaluateResultFromResult(hookruntime.Result{
 				Decision: hookruntime.DecisionAllow,
 				Reason:   "Kontext hosted access is not enforcing.",
 				Mode:     string(accessMode),
 			})
 		}
-		return EvaluateResult{
-			Type:     "result",
+		return EvaluateResultFromResult(hookruntime.Result{
 			Decision: hookruntime.DecisionDeny,
-			Allowed:  false,
 			Reason:   "Kontext access policy could not be evaluated.",
-		}
+		})
 	}
 	if err := s.refreshAccessMode(result.AccessMode); err != nil {
 		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
 		if result.AccessMode == backend.HostedAccessModeEnforce {
-			return EvaluateResult{
-				Type:     "result",
+			return EvaluateResultFromResult(hookruntime.Result{
 				Decision: hookruntime.DecisionDeny,
-				Allowed:  false,
 				Reason:   "Kontext access policy mode could not be persisted.",
 				Mode:     string(result.AccessMode),
-			}
+			})
 		}
 	}
 
@@ -283,7 +279,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 	}
 	resp := result.Response
 	if accessMode != backend.HostedAccessModeEnforce {
-		return resultFromRuntime(hookruntime.Result{
+		return EvaluateResultFromResult(hookruntime.Result{
 			Decision:   hookruntime.DecisionAllow,
 			Reason:     resp.GetReason(),
 			ReasonCode: result.ReasonCode,
@@ -303,9 +299,9 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 			Mode:       string(accessMode),
 			Epoch:      result.PolicySetEpoch,
 		}
-		return resultFromRuntime(runtimeResult)
+		return EvaluateResultFromResult(runtimeResult)
 	case agentv1.Decision_DECISION_ASK:
-		return resultFromRuntime(hookruntime.Result{
+		return EvaluateResultFromResult(hookruntime.Result{
 			Decision:   hookruntime.DecisionAsk,
 			Reason:     resp.GetReason(),
 			ReasonCode: result.ReasonCode,
@@ -316,7 +312,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 	case agentv1.Decision_DECISION_DENY:
 		fallthrough
 	default:
-		return resultFromRuntime(hookruntime.Result{
+		return EvaluateResultFromResult(hookruntime.Result{
 			Decision:   hookruntime.DecisionDeny,
 			Reason:     resp.GetReason(),
 			ReasonCode: result.ReasonCode,
@@ -328,21 +324,7 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 }
 
 func defaultAllowResult() EvaluateResult {
-	return resultFromRuntime(hookruntime.Result{Decision: hookruntime.DecisionAllow})
-}
-
-func resultFromRuntime(result hookruntime.Result) EvaluateResult {
-	return EvaluateResult{
-		Type:         "result",
-		Decision:     result.Decision,
-		Allowed:      result.Allowed(),
-		Reason:       result.Reason,
-		ReasonCode:   result.ReasonCode,
-		RequestID:    result.RequestID,
-		Mode:         result.Mode,
-		Epoch:        result.Epoch,
-		UpdatedInput: result.UpdatedInput,
-	}
+	return EvaluateResultFromResult(hookruntime.Result{Decision: hookruntime.DecisionAllow})
 }
 
 func buildHookEventRequest(sessionID, agentName string, req *EvaluateRequest) *agentv1.ProcessHookEventRequest {
