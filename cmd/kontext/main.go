@@ -15,8 +15,8 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookcmd"
-	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/run"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 	"github.com/kontext-security/kontext-cli/internal/update"
@@ -182,18 +182,11 @@ func hookCmd() *cobra.Command {
 			}
 
 			socketPath := os.Getenv("KONTEXT_SOCKET")
-			if socketPath == "" {
-				hookcmd.Run(a, func(e hookruntime.Event) (hookruntime.Result, error) {
-					return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "no sidecar"}, nil
-				})
-				return nil
-			}
-
-			hookcmd.Run(a, func(e hookruntime.Event) (hookruntime.Result, error) {
+			hookcmd.Run(a, func(e hook.Event) (hook.Result, error) {
 				if e.Agent == "" {
 					e.Agent = agentName
 				}
-				return evaluateViaSidecar(socketPath, e)
+				return evaluateHookWithSidecar(socketPath, e)
 			})
 			return nil
 		},
@@ -204,7 +197,14 @@ func hookCmd() *cobra.Command {
 	return cmd
 }
 
-func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime.Result, error) {
+func evaluateHookWithSidecar(socketPath string, event hook.Event) (hook.Result, error) {
+	if socketPath == "" {
+		return sidecarFailureResult(event, "sidecar socket missing"), nil
+	}
+	return evaluateViaSidecar(socketPath, event)
+}
+
+func evaluateViaSidecar(socketPath string, event hook.Event) (hook.Result, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
 		return sidecarFailureResult(event, "sidecar unreachable"), nil
@@ -231,14 +231,14 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 	return sidecar.ResultFromEvaluateResult(result), nil
 }
 
-func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Result {
-	if event.HookName != hookruntime.HookPreToolUse {
-		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
+func sidecarFailureResult(event hook.Event, reason string) hook.Result {
+	if event.HookName != hook.HookPreToolUse {
+		return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
 	}
 	if currentHostedAccessMode() == "enforce" {
-		return hookruntime.Result{Decision: hookruntime.DecisionDeny, Reason: reason, Mode: "enforce"}
+		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
-	return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
+	return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
 }
 
 func currentHostedAccessMode() string {

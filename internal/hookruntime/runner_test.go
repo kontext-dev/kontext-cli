@@ -3,13 +3,15 @@ package hookruntime
 import (
 	"bytes"
 	"testing"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 func TestRunWritesStructuredDenyResult(t *testing.T) {
 	t.Parallel()
 
 	codec := stubCodec{
-		event: Event{HookName: HookPreToolUse},
+		event: hook.Event{HookName: hook.HookPreToolUse},
 		out:   []byte(`{"hookSpecificOutput":{"permissionDecision":"deny"}}`),
 	}
 	stdout := &bytes.Buffer{}
@@ -20,8 +22,8 @@ func TestRunWritesStructuredDenyResult(t *testing.T) {
 		stdout,
 		stderr,
 		codec,
-		SinkFunc(func(Event) (Result, error) {
-			return Result{Decision: DecisionDeny, Reason: "blocked by policy"}, nil
+		SinkFunc(func(hook.Event) (hook.Result, error) {
+			return hook.Result{Decision: hook.DecisionDeny, Reason: "blocked by policy"}, nil
 		}),
 	)
 
@@ -40,7 +42,7 @@ func TestRunWritesStructuredAskResult(t *testing.T) {
 	t.Parallel()
 
 	codec := stubCodec{
-		event: Event{HookName: HookPreToolUse},
+		event: hook.Event{HookName: hook.HookPreToolUse},
 		out:   []byte(`{"hookSpecificOutput":{"permissionDecision":"ask"}}`),
 	}
 	stdout := &bytes.Buffer{}
@@ -51,8 +53,8 @@ func TestRunWritesStructuredAskResult(t *testing.T) {
 		stdout,
 		stderr,
 		codec,
-		SinkFunc(func(Event) (Result, error) {
-			return Result{Decision: DecisionAsk, Reason: "approval required"}, nil
+		SinkFunc(func(hook.Event) (hook.Result, error) {
+			return hook.Result{Decision: hook.DecisionAsk, Reason: "approval required"}, nil
 		}),
 	)
 
@@ -68,14 +70,14 @@ func TestRunWritesStructuredAskResult(t *testing.T) {
 }
 
 type stubCodec struct {
-	event Event
+	event hook.Event
 	out   []byte
 }
 
-func (s stubCodec) DecodeHookEvent([]byte) (Event, error) {
+func (s stubCodec) DecodeHookEvent([]byte) (hook.Event, error) {
 	return s.event, nil
 }
 
-func (s stubCodec) EncodeHookResult(Event, Result) ([]byte, error) {
+func (s stubCodec) EncodeHookResult(hook.Event, hook.Result) ([]byte, error) {
 	return s.out, nil
 }

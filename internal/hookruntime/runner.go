@@ -3,20 +3,22 @@ package hookruntime
 import (
 	"fmt"
 	"io"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 type Codec interface {
-	DecodeHookEvent([]byte) (Event, error)
-	EncodeHookResult(Event, Result) ([]byte, error)
+	DecodeHookEvent([]byte) (hook.Event, error)
+	EncodeHookResult(hook.Event, hook.Result) ([]byte, error)
 }
 
 type Sink interface {
-	ProcessHookEvent(Event) (Result, error)
+	ProcessHookEvent(hook.Event) (hook.Result, error)
 }
 
-type SinkFunc func(Event) (Result, error)
+type SinkFunc func(hook.Event) (hook.Result, error)
 
-func (f SinkFunc) ProcessHookEvent(event Event) (Result, error) {
+func (f SinkFunc) ProcessHookEvent(event hook.Event) (hook.Result, error) {
 	return f(event)
 }
 
