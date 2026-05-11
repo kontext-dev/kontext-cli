@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -241,17 +242,28 @@ func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Re
 }
 
 func currentHostedAccessMode() string {
-	mode := os.Getenv("KONTEXT_ACCESS_MODE")
+	if modePath := os.Getenv("KONTEXT_ACCESS_MODE_PATH"); modePath != "" {
+		data, err := os.ReadFile(modePath)
+		if err != nil {
+			return "enforce"
+		}
+		if mode := normalizedHostedAccessMode(string(data)); mode != "" {
+			return mode
+		}
+		return "enforce"
+	}
+	return normalizedHostedAccessMode(os.Getenv("KONTEXT_ACCESS_MODE"))
+}
+
+func normalizedHostedAccessMode(value string) string {
+	mode := strings.TrimSpace(value)
 	if mode == "disabled" || mode == "no_policy" {
 		return mode
 	}
 	if mode == "enforce" {
 		return "enforce"
 	}
-	if os.Getenv("KONTEXT_ACCESS_MODE_PATH") != "" {
-		return "enforce"
-	}
-	return mode
+	return ""
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)

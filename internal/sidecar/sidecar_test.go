@@ -17,6 +17,7 @@ import (
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
@@ -356,6 +357,54 @@ func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	}
 	if result.Reason == "" {
 		t.Fatal("evaluate().Reason = empty, want failure reason")
+	}
+}
+
+func TestEvaluateFailsClosedWhenBlockingHookPayloadCannotDecode(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     &stubProcessor{},
+		diagnostic: diagnostic.New(io.Discard, false),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolInput: json.RawMessage(`{`),
+	})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if result.Decision != string(hook.DecisionDeny) {
+		t.Fatalf("evaluate().Decision = %q, want deny", result.Decision)
+	}
+}
+
+func TestEvaluateAllowsNonblockingHookPayloadDecodeFailure(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     &stubProcessor{},
+		diagnostic: diagnostic.New(io.Discard, false),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PostToolUse",
+		ToolInput: json.RawMessage(`{`),
+	})
+
+	if !result.Allowed {
+		t.Fatal("evaluate().Allowed = false, want true")
+	}
+	if result.Decision != string(hook.DecisionAllow) {
+		t.Fatalf("evaluate().Decision = %q, want allow", result.Decision)
 	}
 }
 
