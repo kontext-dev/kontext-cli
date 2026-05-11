@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/agent/claude"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 func TestAgentAdapterDecodePreservesHookEvent(t *testing.T) {
@@ -17,18 +17,18 @@ func TestAgentAdapterDecodePreservesHookEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.HookName != "PreToolUse" || !event.CanBlock {
+	if event.HookName != hook.HookPreToolUse || !event.HookName.CanBlock() {
 		t.Fatalf("event = %+v, want blocking PreToolUse", event)
 	}
-	if event.RiskEvent.Agent != "claude-code" ||
-		event.RiskEvent.SessionID != "s1" ||
-		event.RiskEvent.ToolName != "Read" ||
-		event.RiskEvent.ToolUseID != "toolu_123" ||
-		event.RiskEvent.CWD != "/tmp/project" {
-		t.Fatalf("risk event = %+v, want decoded metadata", event.RiskEvent)
+	if event.Agent != "claude-code" ||
+		event.SessionID != "s1" ||
+		event.ToolName != "Read" ||
+		event.ToolUseID != "toolu_123" ||
+		event.CWD != "/tmp/project" {
+		t.Fatalf("event = %+v, want decoded metadata", event)
 	}
-	if event.RiskEvent.ToolInput["file_path"] != ".env" {
-		t.Fatalf("tool input = %+v", event.RiskEvent.ToolInput)
+	if event.ToolInput["file_path"] != ".env" {
+		t.Fatalf("tool input = %+v", event.ToolInput)
 	}
 }
 
@@ -36,13 +36,11 @@ func TestAgentAdapterEncodeObserveModeAllowsWouldDeny(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(&out, Result{
-		HookName: "PreToolUse",
-		CanBlock: true,
-		Decision: risk.DecisionDeny,
-		Reason:   "blocked",
-		Mode:     ModeObserve,
-	})
+	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(
+		&out,
+		hook.Event{HookName: hook.HookPreToolUse},
+		hook.Result{Decision: hook.DecisionAllow, Reason: "Kontext observe mode: would deny; blocked", Mode: string(ModeObserve)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,21 +52,19 @@ func TestAgentAdapterEncodeObserveModeAllowsWouldDeny(t *testing.T) {
 	}
 }
 
-func TestAgentAdapterEncodeEnforceModeDeniesAsk(t *testing.T) {
+func TestAgentAdapterEncodeEnforceModeAsksAsk(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
-	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(&out, Result{
-		HookName: "PreToolUse",
-		CanBlock: true,
-		Decision: risk.DecisionAsk,
-		Reason:   "needs review",
-		Mode:     ModeEnforce,
-	})
+	err := AgentAdapter{Agent: &claude.Claude{}, AgentName: "claude-code"}.Encode(
+		&out,
+		hook.Event{HookName: hook.HookPreToolUse},
+		hook.Result{Decision: hook.DecisionAsk, Reason: "needs review", Mode: string(ModeEnforce)},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `"permissionDecision":"deny"`) {
+	if !strings.Contains(out.String(), `"permissionDecision":"ask"`) {
 		t.Fatalf("output = %s", out.String())
 	}
 }

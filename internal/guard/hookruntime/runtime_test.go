@@ -7,28 +7,23 @@ import (
 	"io"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 func TestRunObserveModeAllowsUnavailableBlockingHook(t *testing.T) {
 	t.Parallel()
 
 	adapter := &stubAdapter{
-		event: Event{
-			HookName:  "PreToolUse",
-			CanBlock:  true,
-			RiskEvent: risk.HookEvent{HookEventName: "PreToolUse"},
-		},
+		event: hook.Event{HookName: hook.HookPreToolUse},
 	}
 	err := Run(context.Background(), adapter, stubProcessor{err: errors.New("offline")}, ModeObserve, bytes.NewReader(nil), io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.result.Decision != risk.DecisionAllow {
+	if adapter.result.Decision != hook.DecisionAllow {
 		t.Fatalf("decision = %s, want allow", adapter.result.Decision)
 	}
-	if adapter.result.Reason != "telemetry allowed" {
+	if adapter.result.Reason != "Kontext observe mode: would allow; telemetry allowed" {
 		t.Fatalf("reason = %q", adapter.result.Reason)
 	}
 }
@@ -37,17 +32,13 @@ func TestRunEnforceModeDeniesUnavailableBlockingHook(t *testing.T) {
 	t.Parallel()
 
 	adapter := &stubAdapter{
-		event: Event{
-			HookName:  "PreToolUse",
-			CanBlock:  true,
-			RiskEvent: risk.HookEvent{HookEventName: "PreToolUse"},
-		},
+		event: hook.Event{HookName: hook.HookPreToolUse},
 	}
 	err := Run(context.Background(), adapter, stubProcessor{err: errors.New("offline")}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.result.Decision != risk.DecisionDeny {
+	if adapter.result.Decision != hook.DecisionDeny {
 		t.Fatalf("decision = %s, want deny", adapter.result.Decision)
 	}
 	if adapter.result.Reason != "Kontext daemon unavailable" {
@@ -59,18 +50,50 @@ func TestRunNonBlockingHookCannotBlock(t *testing.T) {
 	t.Parallel()
 
 	adapter := &stubAdapter{
-		event: Event{
-			HookName:  "PostToolUse",
-			CanBlock:  false,
-			RiskEvent: risk.HookEvent{HookEventName: "PostToolUse"},
-		},
+		event: hook.Event{HookName: hook.HookPostToolUse},
 	}
-	err := Run(context.Background(), adapter, stubProcessor{resp: server.ProcessResponse{Decision: risk.DecisionDeny, Reason: "blocked"}}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
+	err := Run(context.Background(), adapter, stubProcessor{result: hook.Result{Decision: hook.DecisionDeny, Reason: "blocked"}}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.result.Decision != risk.DecisionAllow {
+	if adapter.result.Decision != hook.DecisionAllow {
 		t.Fatalf("decision = %s, want allow", adapter.result.Decision)
+	}
+}
+
+func TestRunObserveModeFormatsNonBlockingHookReason(t *testing.T) {
+	t.Parallel()
+
+	adapter := &stubAdapter{
+		event: hook.Event{HookName: hook.HookPostToolUse},
+	}
+	err := Run(context.Background(), adapter, stubProcessor{result: hook.Result{Decision: hook.DecisionAllow, Reason: "async telemetry event recorded"}}, ModeObserve, bytes.NewReader(nil), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.result.Decision != hook.DecisionAllow {
+		t.Fatalf("decision = %s, want allow", adapter.result.Decision)
+	}
+	if adapter.result.Reason != "Kontext observe mode: would allow; async telemetry event recorded" {
+		t.Fatalf("reason = %q", adapter.result.Reason)
+	}
+}
+
+func TestRunObserveModeAllowsWithWouldDenyReason(t *testing.T) {
+	t.Parallel()
+
+	adapter := &stubAdapter{
+		event: hook.Event{HookName: hook.HookPreToolUse},
+	}
+	err := Run(context.Background(), adapter, stubProcessor{result: hook.Result{Decision: hook.DecisionDeny, Reason: "blocked"}}, ModeObserve, bytes.NewReader(nil), io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.result.Decision != hook.DecisionAllow {
+		t.Fatalf("decision = %s, want allow", adapter.result.Decision)
+	}
+	if adapter.result.Reason != "Kontext observe mode: would deny; blocked" {
+		t.Fatalf("reason = %q", adapter.result.Reason)
 	}
 }
 
@@ -78,45 +101,41 @@ func TestRunUnknownDecisionFailsClosedForBlockingHook(t *testing.T) {
 	t.Parallel()
 
 	adapter := &stubAdapter{
-		event: Event{
-			HookName:  "PreToolUse",
-			CanBlock:  true,
-			RiskEvent: risk.HookEvent{HookEventName: "PreToolUse"},
-		},
+		event: hook.Event{HookName: hook.HookPreToolUse},
 	}
-	err := Run(context.Background(), adapter, stubProcessor{resp: server.ProcessResponse{Decision: "unexpected"}}, ModeObserve, bytes.NewReader(nil), io.Discard, io.Discard)
+	err := Run(context.Background(), adapter, stubProcessor{result: hook.Result{Decision: "unexpected"}}, ModeEnforce, bytes.NewReader(nil), io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if adapter.result.Decision != risk.DecisionDeny {
+	if adapter.result.Decision != hook.DecisionDeny {
 		t.Fatalf("decision = %s, want deny", adapter.result.Decision)
 	}
 }
 
 type stubProcessor struct {
-	resp server.ProcessResponse
-	err  error
+	result hook.Result
+	err    error
 }
 
-func (p stubProcessor) Process(context.Context, risk.HookEvent) (server.ProcessResponse, error) {
-	return p.resp, p.err
+func (p stubProcessor) Process(context.Context, hook.Event) (hook.Result, error) {
+	return p.result, p.err
 }
 
 type stubAdapter struct {
-	event     Event
+	event     hook.Event
 	decodeErr error
-	result    Result
+	result    hook.Result
 }
 
-func (a *stubAdapter) Decode(io.Reader) (Event, error) {
+func (a *stubAdapter) Decode(io.Reader) (hook.Event, error) {
 	return a.event, a.decodeErr
 }
 
-func (a *stubAdapter) Encode(_ io.Writer, result Result) error {
+func (a *stubAdapter) Encode(_ io.Writer, _ hook.Event, result hook.Result) error {
 	a.result = result
 	return nil
 }
 
-func (a *stubAdapter) MalformedHookName() string {
-	return "PreToolUse"
+func (a *stubAdapter) MalformedHookName() hook.HookName {
+	return hook.HookPreToolUse
 }

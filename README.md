@@ -59,7 +59,7 @@ To add short-lived credentials and team-visible traces, run `kontext start --age
 | Scoped credentials | Replace hardcoded provider keys with short-lived tokens injected only for the active agent session. |
 | Managed env file | Keep provider placeholders in `.env.kontext` instead of raw secrets. |
 | Hosted connect | Connect missing user providers through a browser flow instead of leaking keys locally. |
-| Governed sessions | Stream PreToolUse, PostToolUse, and UserPromptSubmit events to Kontext in hosted mode. |
+| Governed sessions | Stream PreToolUse and PostToolUse events to Kontext in hosted mode. |
 | Native runtime | One small Go binary. Guard mode has an embedded dashboard; installed users do not need Node or Docker. |
 
 ## Managed Credentials
@@ -120,7 +120,6 @@ kontext guard start
   │    │
   │    ├─ PreToolUse        → kontext guard hook claude-code
   │    ├─ PostToolUse       → kontext guard hook claude-code
-  │    └─ UserPromptSubmit  → kontext guard hook claude-code
   │
   ├─ Local daemon: 127.0.0.1:4765
   ├─ Risk engine: deterministic rules + Markov-chain score
@@ -142,7 +141,6 @@ kontext start --agent claude
   │    │
   │    ├─ PreToolUse        → kontext hook → sidecar → ProcessHookEvent
   │    ├─ PostToolUse       → kontext hook → sidecar → ProcessHookEvent
-  │    └─ UserPromptSubmit  → kontext hook → sidecar → ProcessHookEvent
   │
   └─ Exit: EndSession → credential expiry + temp file cleanup
 ```
