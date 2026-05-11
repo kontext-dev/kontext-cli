@@ -1,7 +1,6 @@
 package hook
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -70,13 +69,6 @@ type Result struct {
 	UpdatedInput map[string]any
 }
 
-func ResultFromBool(allowed bool, reason string) Result {
-	if allowed {
-		return Result{Decision: DecisionAllow, Reason: reason}
-	}
-	return Result{Decision: DecisionDeny, Reason: reason}
-}
-
 func (r Result) Allowed() bool {
 	return r.Decision == DecisionAllow
 }
@@ -107,15 +99,4 @@ func (r Result) ClaudeReason() string {
 
 func containsRequestID(reason string) bool {
 	return strings.Contains(strings.ToLower(reason), "request id")
-}
-
-func MarshalMap(value map[string]any) (json.RawMessage, error) {
-	if value == nil {
-		return nil, nil
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
 }
