@@ -213,32 +213,9 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 		return sidecarFailureResult(event, "sidecar deadline error"), nil
 	}
 
-	req := sidecar.EvaluateRequest{
-		Type:           "evaluate",
-		Agent:          event.Agent,
-		HookEvent:      event.HookName.String(),
-		ToolName:       event.ToolName,
-		ToolUseID:      event.ToolUseID,
-		CWD:            event.CWD,
-		PermissionMode: event.PermissionMode,
-		DurationMs:     event.DurationMs,
-		Error:          event.Error,
-		IsInterrupt:    event.IsInterrupt,
-	}
-
-	if event.ToolInput != nil {
-		data, err := hookruntime.MarshalMap(event.ToolInput)
-		if err != nil {
-			return sidecarFailureResult(event, "sidecar marshal error"), nil
-		}
-		req.ToolInput = data
-	}
-	if event.ToolResponse != nil {
-		data, err := hookruntime.MarshalMap(event.ToolResponse)
-		if err != nil {
-			return sidecarFailureResult(event, "sidecar marshal error"), nil
-		}
-		req.ToolResponse = data
+	req, err := sidecar.EvaluateRequestFromEvent(event)
+	if err != nil {
+		return sidecarFailureResult(event, "sidecar marshal error"), nil
 	}
 
 	if err := sidecar.WriteMessage(conn, req); err != nil {
@@ -250,19 +227,7 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 		return sidecarFailureResult(event, "sidecar read error"), nil
 	}
 
-	decision, ok := hookruntime.NormalizeDecision(string(result.Decision))
-	if !ok {
-		decision = hookruntime.ResultFromBool(result.Allowed, result.Reason).Decision
-	}
-	return hookruntime.Result{
-		Decision:     decision,
-		Reason:       result.Reason,
-		ReasonCode:   result.ReasonCode,
-		RequestID:    result.RequestID,
-		Mode:         result.Mode,
-		Epoch:        result.Epoch,
-		UpdatedInput: result.UpdatedInput,
-	}, nil
+	return sidecar.ResultFromEvaluateResult(result), nil
 }
 
 func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Result {
