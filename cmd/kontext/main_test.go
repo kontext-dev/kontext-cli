@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 	"github.com/zalando/go-keyring"
 )
@@ -92,17 +92,21 @@ func TestEvaluateViaSidecarFailsOpenOnMarshalErrors(t *testing.T) {
 
 	tests := []struct {
 		name  string
-		event *agent.HookEvent
+		event hookruntime.Event
 	}{
 		{
 			name: "tool input",
-			event: &agent.HookEvent{
+			event: hookruntime.Event{
+				Agent:     "claude",
+				HookName:  hook.HookPreToolUse,
 				ToolInput: map[string]any{"bad": func() {}},
 			},
 		},
 		{
 			name: "tool response",
-			event: &agent.HookEvent{
+			event: hookruntime.Event{
+				Agent:        "claude",
+				HookName:     hook.HookPreToolUse,
 				ToolResponse: map[string]any{"bad": func() {}},
 			},
 		},
@@ -110,7 +114,7 @@ func TestEvaluateViaSidecarFailsOpenOnMarshalErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := evaluateViaSidecar(socketPath, hookruntime.EventFromAgent("claude", tt.event))
+			result, err := evaluateViaSidecar(socketPath, tt.event)
 			if err != nil {
 				t.Fatalf("evaluateViaSidecar() error = %v", err)
 			}
@@ -129,9 +133,9 @@ func TestEvaluateViaSidecarFailsClosedWhenEnforceSidecarUnavailable(t *testing.T
 
 	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
 	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
-		Agent:         "claude",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
 	})
 	if err != nil {
 		t.Fatalf("evaluateViaSidecar() error = %v", err)
@@ -149,9 +153,9 @@ func TestEvaluateViaSidecarFailsClosedWhenAccessModePathSet(t *testing.T) {
 
 	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
 	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
-		Agent:         "claude",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
 	})
 	if err != nil {
 		t.Fatalf("evaluateViaSidecar() error = %v", err)
@@ -173,9 +177,9 @@ func TestEvaluateViaSidecarFailsOpenWhenNoPolicyModePathSet(t *testing.T) {
 
 	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
 	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
-		Agent:         "claude",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
 	})
 	if err != nil {
 		t.Fatalf("evaluateViaSidecar() error = %v", err)
@@ -196,9 +200,9 @@ func TestEvaluateViaSidecarDoesNotTrustAccessModePathContents(t *testing.T) {
 
 	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
 	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
-		Agent:         "claude",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
 	})
 	if err != nil {
 		t.Fatalf("evaluateViaSidecar() error = %v", err)
@@ -216,9 +220,9 @@ func TestEvaluateViaSidecarFailsOpenWhenObserveSidecarUnavailable(t *testing.T) 
 
 	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
 	result, err := evaluateViaSidecar(socketPath, hookruntime.Event{
-		Agent:         "claude",
-		HookEventName: "PreToolUse",
-		ToolName:      "Bash",
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
 	})
 	if err != nil {
 		t.Fatalf("evaluateViaSidecar() error = %v", err)

@@ -1,31 +1,17 @@
 package agent
 
+import "github.com/kontext-security/kontext-cli/internal/hook"
+
 type Agent interface {
 	Name() string
 
-	DecodeHookInput(input []byte) (*HookEvent, error)
+	DecodeHookInput(input []byte) (hook.Event, error)
 
-	EncodeAllow(event *HookEvent, reason string, updatedInput map[string]any) ([]byte, error)
-
-	EncodeDeny(event *HookEvent, reason string) ([]byte, error)
+	EncodeHookResult(event hook.Event, result hook.Result) ([]byte, error)
 }
 
 type Aliaser interface {
 	Aliases() []string
-}
-
-type HookEvent struct {
-	SessionID      string
-	HookEventName  string
-	ToolName       string
-	ToolInput      map[string]any
-	ToolResponse   map[string]any
-	ToolUseID      string
-	CWD            string
-	PermissionMode string
-	DurationMs     *int64
-	Error          string
-	IsInterrupt    *bool
 }
 
 var registry = map[string]Agent{}

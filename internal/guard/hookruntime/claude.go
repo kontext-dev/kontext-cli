@@ -8,6 +8,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 type AgentAdapter struct {
@@ -30,7 +31,7 @@ func (a AgentAdapter) Decode(r io.Reader) (Event, error) {
 	event := risk.HookEvent{
 		SessionID:     agentEvent.SessionID,
 		Agent:         a.outputAgentName(),
-		HookEventName: agentEvent.HookEventName,
+		HookEventName: agentEvent.HookName.String(),
 		ToolName:      agentEvent.ToolName,
 		ToolInput:     agentEvent.ToolInput,
 		ToolResponse:  agentEvent.ToolResponse,
@@ -55,22 +56,19 @@ func (a AgentAdapter) Encode(out io.Writer, result Result) error {
 	if a.Agent == nil {
 		return errors.New("agent adapter missing agent")
 	}
-	event := &agent.HookEvent{HookEventName: result.HookName}
 	reason := formatReason(result.Decision, result.Reason, result.Mode)
-	var (
-		payload []byte
-		err     error
-	)
+	hookResult := hook.Result{Reason: reason}
 	if result.Mode == ModeEnforce && result.CanBlock {
 		switch result.Decision {
 		case risk.DecisionAsk, risk.DecisionDeny:
-			payload, err = a.Agent.EncodeDeny(event, reason)
+			hookResult.Decision = hook.DecisionDeny
 		default:
-			payload, err = a.Agent.EncodeAllow(event, reason, nil)
+			hookResult.Decision = hook.DecisionAllow
 		}
 	} else {
-		payload, err = a.Agent.EncodeAllow(event, reason, nil)
+		hookResult.Decision = hook.DecisionAllow
 	}
+	payload, err := a.Agent.EncodeHookResult(hook.Event{HookName: hook.HookName(result.HookName)}, hookResult)
 	if err != nil {
 		return err
 	}

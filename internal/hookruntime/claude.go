@@ -46,10 +46,14 @@ func DecodeClaudeEvent(input []byte, agentName string) (Event, error) {
 	if err := json.Unmarshal(input, &h); err != nil {
 		return Event{}, fmt.Errorf("claude: decode hook input: %w", err)
 	}
+	hookName := firstString(h.HookEventName, h.HookEventNameAlt, h.HookEventLegacy)
+	if hookName == "" {
+		return Event{}, fmt.Errorf("claude: hook event name missing")
+	}
 	return Event{
 		SessionID:      firstString(h.SessionID, h.SessionIDAlt),
 		Agent:          agentName,
-		HookEventName:  firstString(h.HookEventName, h.HookEventNameAlt, h.HookEventLegacy),
+		HookName:       HookName(hookName),
 		ToolName:       firstString(h.ToolName, h.ToolNameAlt),
 		ToolInput:      firstMap(h.ToolInput, h.ToolInputAlt),
 		ToolResponse:   firstMap(h.ToolResponse, h.ToolResponseAlt),
@@ -81,9 +85,15 @@ func firstMap(values ...map[string]any) map[string]any {
 }
 
 func EncodeClaudeResult(hookEventName string, result Result) ([]byte, error) {
-	permissionDecision := "allow"
-	if result.Decision == DecisionAsk || result.Decision == DecisionDeny {
-		permissionDecision = "deny"
+	if HookName(hookEventName) != HookPreToolUse {
+		return json.Marshal(claudeHookOutput{SuppressOutput: true})
+	}
+
+	permissionDecision := string(result.Decision)
+	if permissionDecision != string(DecisionAllow) &&
+		permissionDecision != string(DecisionAsk) &&
+		permissionDecision != string(DecisionDeny) {
+		permissionDecision = string(DecisionDeny)
 	}
 	reason := result.ClaudeReason()
 	if permissionDecision == "allow" && strings.EqualFold(strings.TrimSpace(reason), "allowed") {

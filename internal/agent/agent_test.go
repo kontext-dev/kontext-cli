@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
+)
 
 type registryTestAgent struct{}
 
@@ -8,13 +12,11 @@ func (registryTestAgent) Name() string { return "registry-test" }
 
 func (registryTestAgent) Aliases() []string { return []string{"registry-test-alias"} }
 
-func (registryTestAgent) DecodeHookInput([]byte) (*HookEvent, error) { return &HookEvent{}, nil }
+func (registryTestAgent) DecodeHookInput([]byte) (hook.Event, error) { return hook.Event{}, nil }
 
-func (registryTestAgent) EncodeAllow(*HookEvent, string, map[string]any) ([]byte, error) {
+func (registryTestAgent) EncodeHookResult(hook.Event, hook.Result) ([]byte, error) {
 	return nil, nil
 }
-
-func (registryTestAgent) EncodeDeny(*HookEvent, string) ([]byte, error) { return nil, nil }
 
 func TestRegistryResolvesAliasesWithoutListingThemAsPrimaryNames(t *testing.T) {
 	Register(registryTestAgent{})
