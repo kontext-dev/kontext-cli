@@ -492,7 +492,10 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	localServer := server.NewServer(store, risk.NoopScorer{})
+	localServer, err := server.NewServer(store, risk.NoopScorer{})
+	if err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
