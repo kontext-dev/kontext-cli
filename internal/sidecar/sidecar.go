@@ -120,15 +120,7 @@ func (s *Server) SocketPath() string { return s.socketPath }
 func (s *Server) AccessModePath() string { return s.modePath }
 
 func (s *Server) runtimeCore() *runtimecore.Core {
-	if s.core != nil {
-		return s.core
-	}
-	core, err := runtimecore.New(s.hostedRuntime())
-	if err != nil {
-		panic(err)
-	}
-	s.core = core
-	return core
+	return s.core
 }
 
 func (s *Server) hostedRuntime() hostedHookRuntime {
@@ -279,6 +271,14 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 	result, err := s.runtimeCore().EvaluateHook(ctx, event)
 	if err != nil {
 		s.diagnostic.Printf("sidecar enforce: %v\n", err)
+		accessMode := s.currentAccessMode()
+		if accessMode != backend.HostedAccessModeEnforce {
+			return EvaluateResultFromResult(hook.Result{
+				Decision: hook.DecisionAllow,
+				Reason:   "Kontext hosted access is not enforcing.",
+				Mode:     string(accessMode),
+			})
+		}
 		return EvaluateResultFromResult(hook.Result{
 			Decision: hook.DecisionDeny,
 			Reason:   "Kontext access policy could not be evaluated.",

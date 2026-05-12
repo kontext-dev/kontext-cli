@@ -20,10 +20,21 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 func newTestLogger(buf *bytes.Buffer) diagnostic.Logger {
 	return diagnostic.New(buf, true)
+}
+
+func withRuntimeCore(t *testing.T, s *Server) *Server {
+	t.Helper()
+	core, err := runtimecore.New(s.hostedRuntime())
+	if err != nil {
+		t.Fatalf("runtimecore.New() error = %v", err)
+	}
+	s.core = core
+	return s
 }
 
 func TestHeartbeatDeduplication(t *testing.T) {
@@ -118,14 +129,14 @@ func TestIngestEventRefreshesAccessMode(t *testing.T) {
 	t.Parallel()
 
 	modePath := filepath.Join(t.TempDir(), "access-mode")
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   modePath,
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     &stubProcessor{result: &backend.ProcessHookEventResult{AccessMode: backend.HostedAccessModeEnforce}},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	s.ingestEvent(context.Background(), &EvaluateRequest{HookEvent: "PostToolUse"})
 
@@ -216,12 +227,12 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 			PolicySetEpoch: "4",
 		},
 	}
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID: "session-123",
 		agentName: "claude",
 		modePath:  filepath.Join(t.TempDir(), "access-mode"),
 		client:    client,
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
@@ -246,7 +257,7 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
@@ -262,7 +273,7 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 			},
 		},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
@@ -309,7 +320,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := &Server{
+			s := withRuntimeCore(t, &Server{
 				sessionID:  "session-123",
 				agentName:  "claude",
 				modePath:   filepath.Join(t.TempDir(), "access-mode"),
@@ -327,7 +338,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 					},
 				},
 				diagnostic: diagnostic.New(io.Discard, false),
-			}
+			})
 
 			result := s.evaluate(context.Background(), &EvaluateRequest{
 				HookEvent: "PreToolUse",
@@ -354,7 +365,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
@@ -369,7 +380,7 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 			},
 		},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
@@ -391,13 +402,13 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		accessMode: backend.HostedAccessModeEnforce,
 		client:     &stubProcessor{err: errors.New("backend down")},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 
@@ -460,13 +471,13 @@ func TestEvaluateAllowsNonblockingHookPayloadDecodeFailure(t *testing.T) {
 func TestEvaluatePreToolUseFailsClosedBeforeClaudeHookDeadline(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		accessMode: backend.HostedAccessModeEnforce,
 		client:     &stubProcessor{delay: hookEvalTimeout + time.Second},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	start := time.Now()
 	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
@@ -520,13 +531,13 @@ func TestEvaluatePreToolUseFailsClosedWhenEnforceModeCannotPersist(t *testing.T)
 func TestEvaluatePreToolUseFailsOpenWhenNotEnforcing(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     &stubProcessor{err: errors.New("backend down")},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 
@@ -549,14 +560,14 @@ func TestEvaluateRefreshesAccessModeForLaterFailures(t *testing.T) {
 			AccessMode: backend.HostedAccessModeEnforce,
 		},
 	}
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     client,
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	first := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
@@ -581,14 +592,14 @@ func TestEvaluateRefreshesAccessModeBackToFailOpen(t *testing.T) {
 			AccessMode: backend.HostedAccessModeNoPolicy,
 		},
 	}
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeEnforce,
 		client:     client,
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	first := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {

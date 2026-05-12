@@ -20,28 +20,36 @@ func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider) guardHookRu
 }
 
 func (r guardHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
-	return r.decideAndRecord(ctx, riskEventFromHookEvent(event))
+	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
+	if err != nil {
+		return hook.Result{}, err
+	}
+	return hookResultFromRiskDecision(decision), nil
 }
 
 func (r guardHookRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
-	return r.decideAndRecord(ctx, riskEventFromHookEvent(event))
+	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
+	if err != nil {
+		return hook.Result{}, err
+	}
+	return hookResultFromRiskDecision(decision), nil
 }
 
-func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEvent) (hook.Result, error) {
+func (r guardHookRuntime) decideAndRecord(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
 	decision, err := r.policy.DecideHook(ctx, event)
 	if err != nil {
-		return hook.Result{}, err
+		return risk.RiskDecision{}, err
 	}
 	record, err := r.store.SaveDecision(ctx, event, decision)
 	if err != nil {
-		return hook.Result{}, err
+		return risk.RiskDecision{}, err
 	}
 	decision.EventID = record.ID
 	notify.Decision(decision)
-	return hookResultFromRiskDecision(decision), nil
+	return decision, nil
 }
 
 func riskEventFromHookEvent(event hook.Event) risk.HookEvent {
@@ -71,15 +79,18 @@ func hookEventFromRiskEvent(event risk.HookEvent) hook.Event {
 }
 
 func hookResultFromRiskDecision(decision risk.RiskDecision) hook.Result {
-	return hook.Result{
+	return hook.WithMetadata(hook.Result{
 		Decision:   hook.Decision(decision.Decision),
 		Reason:     decision.Reason,
 		ReasonCode: decision.ReasonCode,
 		EventID:    decision.EventID,
-	}
+	}, decision)
 }
 
 func riskDecisionFromHookResult(result hook.Result) risk.RiskDecision {
+	if decision, ok := result.Metadata().(risk.RiskDecision); ok {
+		return decision
+	}
 	return risk.RiskDecision{
 		Decision:   risk.Decision(result.Decision),
 		Reason:     result.Reason,

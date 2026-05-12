@@ -25,23 +25,40 @@ func New(runtime HookRuntime) (*Core, error) {
 }
 
 func (c *Core) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
-	if event.HookName == "" {
-		return hook.Result{}, errors.New("hook event name is required")
-	}
-	if !event.HookName.CanBlock() {
-		return hook.Result{}, fmt.Errorf("hook event %q cannot be evaluated for enforcement", event.HookName)
+	if err := ValidateEvaluateHook(event); err != nil {
+		return hook.Result{}, err
 	}
 	return c.runtime.EvaluateHook(ctx, event)
 }
 
-func (c *Core) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
+func ValidateEvaluateHook(event hook.Event) error {
 	if event.HookName == "" {
-		return hook.Result{}, errors.New("hook event name is required")
+		return errors.New("hook event name is required")
+	}
+	if !event.HookName.CanBlock() {
+		return fmt.Errorf("hook event %q cannot be evaluated for enforcement", event.HookName)
+	}
+	return nil
+}
+
+func (c *Core) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
+	if err := ValidateIngestEvent(event); err != nil {
+		return hook.Result{}, err
 	}
 	if event.HookName.CanBlock() {
 		return hook.Result{}, fmt.Errorf("hook event %q must be evaluated for enforcement", event.HookName)
 	}
 	return c.runtime.IngestEvent(ctx, event)
+}
+
+func ValidateIngestEvent(event hook.Event) error {
+	if event.HookName == "" {
+		return errors.New("hook event name is required")
+	}
+	if event.HookName.CanBlock() {
+		return fmt.Errorf("hook event %q must be evaluated for enforcement", event.HookName)
+	}
+	return nil
 }
 
 func (c *Core) ProcessHook(ctx context.Context, event hook.Event) (hook.Result, error) {

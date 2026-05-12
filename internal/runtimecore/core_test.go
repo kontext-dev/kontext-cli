@@ -18,6 +18,17 @@ func TestEvaluateHookRejectsTelemetryHooks(t *testing.T) {
 	}
 }
 
+func TestIngestEventRejectsBlockingHooks(t *testing.T) {
+	core, err := New(&recordingRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = core.IngestEvent(context.Background(), hook.Event{HookName: hook.HookPreToolUse})
+	if err == nil {
+		t.Fatal("IngestEvent() error = nil, want blocking hook rejection")
+	}
+}
+
 func TestProcessHookRoutesByBlockingCapability(t *testing.T) {
 	runtime := &recordingRuntime{
 		evaluateResult: hook.Result{Decision: hook.DecisionAsk, Reason: "review"},

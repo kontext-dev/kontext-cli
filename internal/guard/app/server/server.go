@@ -43,7 +43,8 @@ func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) *Server {
 	if policy == nil {
 		policy = NewRiskPolicyProvider(nil)
 	}
-	core, err := runtimecore.New(newGuardHookRuntime(store, policy))
+	runtime := newGuardHookRuntime(store, policy)
+	core, err := runtimecore.New(runtime)
 	if err != nil {
 		panic(err)
 	}
@@ -78,17 +79,26 @@ func (s *Server) routes() {
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	result, err := s.core.EvaluateHook(ctx, hookEventFromRiskEvent(event))
-	return riskDecisionFromHookResult(result), err
+	if err != nil {
+		return risk.RiskDecision{}, err
+	}
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) IngestEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	result, err := s.core.IngestEvent(ctx, hookEventFromRiskEvent(event))
-	return riskDecisionFromHookResult(result), err
+	if err != nil {
+		return risk.RiskDecision{}, err
+	}
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	result, err := s.core.ProcessHook(ctx, hookEventFromRiskEvent(event))
-	return riskDecisionFromHookResult(result), err
+	if err != nil {
+		return risk.RiskDecision{}, err
+	}
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
