@@ -75,18 +75,21 @@ func (s *Server) routes() {
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if event.HookEventName != hook.HookPreToolUse.String() {
+	if !hook.HookName(event.HookEventName).CanBlock() {
 		return risk.RiskDecision{}, fmt.Errorf("hook event %q cannot be evaluated for enforcement", event.HookEventName)
 	}
 	return s.decideAndRecord(ctx, event)
 }
 
 func (s *Server) IngestEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
+	if hook.HookName(event.HookEventName).CanBlock() {
+		return risk.RiskDecision{}, fmt.Errorf("hook event %q must be evaluated for enforcement", event.HookEventName)
+	}
 	return s.decideAndRecord(ctx, event)
 }
 
 func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if event.HookEventName == hook.HookPreToolUse.String() {
+	if hook.HookName(event.HookEventName).CanBlock() {
 		return s.EvaluateHook(ctx, event)
 	}
 	return s.IngestEvent(ctx, event)
