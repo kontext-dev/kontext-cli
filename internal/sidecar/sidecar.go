@@ -16,6 +16,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 // sidecarClient is the backend surface used by the sidecar.
@@ -90,13 +91,14 @@ type Server struct {
 	mu         sync.RWMutex
 	accessMode backend.HostedAccessMode
 	client     sidecarClient
+	core       *runtimecore.Core
 	diagnostic diagnostic.Logger
 	cancel     context.CancelFunc
 }
 
 // New creates a new sidecar server.
 func New(sessionDir string, client sidecarClient, sessionID, agentName string, accessMode backend.HostedAccessMode, diagnostics diagnostic.Logger) (*Server, error) {
-	return &Server{
+	s := &Server{
 		socketPath: filepath.Join(sessionDir, "kontext.sock"),
 		modePath:   filepath.Join(sessionDir, "access-mode"),
 		sessionID:  sessionID,
@@ -104,12 +106,41 @@ func New(sessionDir string, client sidecarClient, sessionID, agentName string, a
 		accessMode: accessMode,
 		client:     client,
 		diagnostic: diagnostics,
-	}, nil
+	}
+	core, err := runtimecore.New(s.hostedRuntime())
+	if err != nil {
+		return nil, err
+	}
+	s.core = core
+	return s, nil
 }
 
 func (s *Server) SocketPath() string { return s.socketPath }
 
 func (s *Server) AccessModePath() string { return s.modePath }
+
+func (s *Server) runtimeCore() *runtimecore.Core {
+	if s.core != nil {
+		return s.core
+	}
+	core, err := runtimecore.New(s.hostedRuntime())
+	if err != nil {
+		panic(err)
+	}
+	s.core = core
+	return core
+}
+
+func (s *Server) hostedRuntime() hostedHookRuntime {
+	return hostedHookRuntime{
+		client:            s.client,
+		sessionID:         s.sessionID,
+		agentName:         s.agentName,
+		diagnostic:        s.diagnostic,
+		currentAccessMode: s.currentAccessMode,
+		refreshAccessMode: s.refreshAccessMode,
+	}
+}
 
 func (s *Server) currentAccessMode() backend.HostedAccessMode {
 	s.mu.RLock()
@@ -209,13 +240,8 @@ func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
 		s.diagnostic.Printf("sidecar ingest decode: %v\n", err)
 		return
 	}
-	result, err := s.processHostedHookEvent(ctx, event)
-	if err != nil {
+	if _, err := s.runtimeCore().IngestEvent(ctx, event); err != nil {
 		s.diagnostic.Printf("sidecar ingest: %v\n", err)
-		return
-	}
-	if err := s.refreshAccessMode(result.AccessMode); err != nil {
-		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
 	}
 }
 
@@ -247,7 +273,18 @@ func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateRes
 		s.diagnostic.Printf("sidecar evaluate decode: %v\n", err)
 		return EvaluateResultFromResult(sidecarDecodeFailureResult(req))
 	}
-	return EvaluateResultFromResult(s.evaluateHook(ctx, event))
+	if !event.HookName.CanBlock() {
+		return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
+	}
+	result, err := s.runtimeCore().EvaluateHook(ctx, event)
+	if err != nil {
+		s.diagnostic.Printf("sidecar enforce: %v\n", err)
+		return EvaluateResultFromResult(hook.Result{
+			Decision: hook.DecisionDeny,
+			Reason:   "Kontext access policy could not be evaluated.",
+		})
+	}
+	return EvaluateResultFromResult(result)
 }
 
 func sidecarDecodeFailureResult(req *EvaluateRequest) hook.Result {
@@ -264,52 +301,6 @@ func sidecarDecodeFailureResult(req *EvaluateRequest) hook.Result {
 		Decision: hook.DecisionDeny,
 		Reason:   "Kontext hook event could not be decoded.",
 	}
-}
-
-func (s *Server) evaluateHook(ctx context.Context, event hook.Event) hook.Result {
-	if event.HookName != hook.HookPreToolUse {
-		return hook.Result{Decision: hook.DecisionAllow}
-	}
-
-	evalCtx, cancel := context.WithTimeout(ctx, hookEvalTimeout)
-	defer cancel()
-
-	result, err := s.processHostedHookEvent(evalCtx, event)
-	if err != nil {
-		s.diagnostic.Printf("sidecar enforce: %v\n", err)
-		accessMode := s.currentAccessMode()
-		if accessMode != backend.HostedAccessModeEnforce {
-			return hook.Result{
-				Decision: hook.DecisionAllow,
-				Reason:   "Kontext hosted access is not enforcing.",
-				Mode:     string(accessMode),
-			}
-		}
-		return hook.Result{
-			Decision: hook.DecisionDeny,
-			Reason:   "Kontext access policy could not be evaluated.",
-		}
-	}
-	if err := s.refreshAccessMode(result.AccessMode); err != nil {
-		s.diagnostic.Printf("sidecar access mode persist: %v\n", err)
-		if result.AccessMode == backend.HostedAccessModeEnforce {
-			return hook.Result{
-				Decision: hook.DecisionDeny,
-				Reason:   "Kontext access policy mode could not be persisted.",
-				Mode:     string(result.AccessMode),
-			}
-		}
-	}
-
-	accessMode := result.AccessMode
-	if accessMode == "" {
-		accessMode = s.currentAccessMode()
-	}
-	return HookResultFromHostedResult(result, accessMode)
-}
-
-func (s *Server) processHostedHookEvent(ctx context.Context, event hook.Event) (*backend.ProcessHookEventResult, error) {
-	return s.client.ProcessHookEvent(ctx, buildHookEventRequestFromEvent(event))
 }
 
 func buildHookEventRequestFromEvent(event hook.Event) *agentv1.ProcessHookEventRequest {
