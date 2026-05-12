@@ -141,6 +141,66 @@ func TestIngestEventRefreshesAccessMode(t *testing.T) {
 	}
 }
 
+func TestNewInitializesRuntimeCore(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(
+		t.TempDir(),
+		&stubProcessor{},
+		"session-123",
+		"claude",
+		backend.HostedAccessModeNoPolicy,
+		diagnostic.New(io.Discard, false),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if s.core == nil {
+		t.Fatal("core = nil, want runtime core initialized")
+	}
+}
+
+func TestEvaluatePreToolUseUsesRuntimeCore(t *testing.T) {
+	t.Parallel()
+
+	client := &stubProcessor{
+		result: &backend.ProcessHookEventResult{
+			Response: &agentv1.ProcessHookEventResponse{
+				Decision: agentv1.Decision_DECISION_DENY,
+				Reason:   "blocked by runtime",
+			},
+			AccessMode: backend.HostedAccessModeEnforce,
+		},
+	}
+	s, err := New(
+		t.TempDir(),
+		client,
+		"session-123",
+		"claude",
+		backend.HostedAccessModeEnforce,
+		diagnostic.New(io.Discard, false),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
+	})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if result.Reason != "blocked by runtime" {
+		t.Fatalf("evaluate().Reason = %q, want runtime decision reason", result.Reason)
+	}
+	if client.processCalls != 1 {
+		t.Fatalf("ProcessHookEvent calls = %d, want 1", client.processCalls)
+	}
+}
+
 func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 	t.Parallel()
 
