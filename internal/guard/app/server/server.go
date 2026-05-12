@@ -37,6 +37,9 @@ func NewServer(store *sqlite.Store, scorer risk.Scorer) *Server {
 	return NewServerWithPolicy(store, NewRiskPolicyProvider(scorer))
 }
 
+// NewServerWithPolicy creates a Guard server with an injected policy provider.
+// A nil interface uses the default local risk policy; callers must not pass a
+// typed-nil provider because it still satisfies the PolicyProvider interface.
 func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) *Server {
 	if policy == nil {
 		policy = NewRiskPolicyProvider(nil)
