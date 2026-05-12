@@ -61,12 +61,64 @@ func TestProcessHookEventReturnsScorerError(t *testing.T) {
 	}
 }
 
+func TestProcessHookEventUsesPolicyProvider(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	policy := recordingPolicy{
+		decision: risk.RiskDecision{
+			Decision:   risk.DecisionAsk,
+			Reason:     "custom policy",
+			ReasonCode: "custom_policy",
+			RiskEvent: risk.RiskEvent{
+				Type: risk.EventUnknown,
+			},
+		},
+	}
+	server := NewServerWithPolicy(store, &policy)
+	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "deploy prod"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !policy.called {
+		t.Fatal("policy provider was not called")
+	}
+	if decision.Decision != risk.DecisionAsk || decision.ReasonCode != "custom_policy" || decision.EventID == "" {
+		t.Fatalf("decision = %+v", decision)
+	}
+	summary, err := store.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Actions != 1 || summary.Warnings != 1 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
 type failingScorer struct {
 	err error
 }
 
 func (s failingScorer) Score(risk.RiskEvent) (risk.ScoreResult, error) {
 	return risk.ScoreResult{}, s.err
+}
+
+type recordingPolicy struct {
+	called   bool
+	decision risk.RiskDecision
+	err      error
+}
+
+func (p *recordingPolicy) DecideHook(_ context.Context, _ risk.HookEvent) (risk.RiskDecision, error) {
+	p.called = true
+	return p.decision, p.err
 }
 
 func TestStoreListsSessions(t *testing.T) {
