@@ -22,6 +22,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
+	"github.com/kontext-security/kontext-cli/internal/guard/modelsnapshot"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/guard/trace"
@@ -116,8 +117,14 @@ func runDaemon(args []string, out io.Writer) error {
 		}
 	}
 	var scorer risk.Scorer = risk.NoopScorer{}
+	activeModelPath := *modelPath
 	if *modelPath != "" {
-		loaded, err := risk.LoadMarkovScorer(*modelPath, *threshold, *horizon)
+		snapshot, err := modelsnapshot.NewWithValidator(defaultModelSnapshotDir(*dbPath), risk.ValidateMarkovModel).ActivateFromFile(*modelPath)
+		if err != nil {
+			return err
+		}
+		activeModelPath = snapshot.Path
+		loaded, err := risk.LoadMarkovScorer(activeModelPath, *threshold, *horizon)
 		if err != nil {
 			return err
 		}
@@ -133,7 +140,7 @@ func runDaemon(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
 	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
 	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
-	fmt.Fprintf(out, "Risk model: %s\n", *modelPath)
+	fmt.Fprintf(out, "Risk model: %s\n", activeModelPath)
 	if !*noOpen {
 		_ = browser.OpenURL("http://" + *addr)
 	}
@@ -659,6 +666,13 @@ func defaultDBPath() string {
 		return filepath.Join(home, ".kontext", "guard.db")
 	}
 	return "kontext-guard.db"
+}
+
+func defaultModelSnapshotDir(dbPath string) string {
+	if dbPath != "" {
+		return filepath.Join(filepath.Dir(dbPath), "models")
+	}
+	return filepath.Join(".", "models")
 }
 
 func selfPath() string {
