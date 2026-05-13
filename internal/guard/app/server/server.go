@@ -3,18 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/app/notify"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
-	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 const (
@@ -22,9 +20,9 @@ const (
 )
 
 type Server struct {
-	store  *sqlite.Store
-	policy PolicyProvider
-	mux    *http.ServeMux
+	store *sqlite.Store
+	core  *runtimecore.Core
+	mux   *http.ServeMux
 }
 
 type ProcessResponse struct {
@@ -45,7 +43,12 @@ func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) *Server {
 	if policy == nil {
 		policy = NewRiskPolicyProvider(nil)
 	}
-	server := &Server{store: store, policy: policy, mux: http.NewServeMux()}
+	runtime := newGuardHookRuntime(store, policy)
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		panic(err)
+	}
+	server := &Server{store: store, core: core, mux: http.NewServeMux()}
 	server.routes()
 	return server
 }
@@ -75,44 +78,27 @@ func (s *Server) routes() {
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if !hook.HookName(event.HookEventName).CanBlock() {
-		return risk.RiskDecision{}, fmt.Errorf("hook event %q cannot be evaluated for enforcement", event.HookEventName)
+	result, err := s.core.EvaluateHook(ctx, hookEventFromRiskEvent(event))
+	if err != nil {
+		return risk.RiskDecision{}, err
 	}
-	return s.decideAndRecord(ctx, event)
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) IngestEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if hook.HookName(event.HookEventName).CanBlock() {
-		return risk.RiskDecision{}, fmt.Errorf("hook event %q must be evaluated for enforcement", event.HookEventName)
+	result, err := s.core.IngestEvent(ctx, hookEventFromRiskEvent(event))
+	if err != nil {
+		return risk.RiskDecision{}, err
 	}
-	return s.decideAndRecord(ctx, event)
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if hook.HookName(event.HookEventName).CanBlock() {
-		return s.EvaluateHook(ctx, event)
-	}
-	return s.IngestEvent(ctx, event)
-}
-
-func (s *Server) decideAndRecord(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if event.HookEventName == "" {
-		return risk.RiskDecision{}, errors.New("hook_event_name is required")
-	}
-	if event.Timestamp.IsZero() {
-		event.Timestamp = time.Now().UTC()
-	}
-	decision, err := s.policy.DecideHook(ctx, event)
+	result, err := s.core.ProcessHook(ctx, hookEventFromRiskEvent(event))
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
-	record, err := s.store.SaveDecision(ctx, event, decision)
-	if err != nil {
-		return risk.RiskDecision{}, err
-	}
-	decision.EventID = record.ID
-	notify.Decision(decision)
-	return decision, nil
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

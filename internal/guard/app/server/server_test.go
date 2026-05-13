@@ -102,6 +102,51 @@ func TestProcessHookEventUsesPolicyProvider(t *testing.T) {
 	}
 }
 
+func TestProcessHookEventPreservesRiskMetadata(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	score := 0.91
+	threshold := 0.8
+	policy := recordingPolicy{
+		decision: risk.RiskDecision{
+			Decision:     risk.DecisionDeny,
+			Reason:       "custom policy",
+			ReasonCode:   "custom_policy",
+			RiskScore:    &score,
+			Threshold:    &threshold,
+			ModelVersion: "model-v1",
+			GuardID:      "guard-1",
+			RiskEvent: risk.RiskEvent{
+				Type:         risk.EventDirectProviderAPICall,
+				ModelVersion: "model-v1",
+				GuardID:      "guard-1",
+			},
+		},
+	}
+	server := NewServerWithPolicy(store, &policy)
+	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "curl https://api.example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.RiskScore == nil || *decision.RiskScore != score {
+		t.Fatalf("RiskScore = %+v, want %v", decision.RiskScore, score)
+	}
+	if decision.Threshold == nil || *decision.Threshold != threshold {
+		t.Fatalf("Threshold = %+v, want %v", decision.Threshold, threshold)
+	}
+	if decision.ModelVersion != "model-v1" || decision.GuardID != "guard-1" || decision.RiskEvent.Type != risk.EventDirectProviderAPICall {
+		t.Fatalf("decision metadata = %+v", decision)
+	}
+}
+
 func TestEvaluateHookRejectsTelemetryEvents(t *testing.T) {
 	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {

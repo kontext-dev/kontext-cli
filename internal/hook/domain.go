@@ -67,6 +67,16 @@ type Result struct {
 	Mode         string
 	Epoch        string
 	UpdatedInput map[string]any
+	metadata     any
+}
+
+func WithMetadata(result Result, metadata any) Result {
+	result.metadata = metadata
+	return result
+}
+
+func (r Result) Metadata() any {
+	return r.metadata
 }
 
 func (r Result) Allowed() bool {
