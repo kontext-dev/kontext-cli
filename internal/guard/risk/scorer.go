@@ -44,6 +44,11 @@ func LoadMarkovScorer(path string, threshold float64, horizon int) (*MarkovScore
 	}, nil
 }
 
+func ValidateMarkovModel(model *markov.Model) error {
+	_, _, err := abstractionFromModel(model)
+	return err
+}
+
 func (s *MarkovScorer) Score(event RiskEvent) (ScoreResult, error) {
 	if s == nil || s.Model == nil {
 		return ScoreResult{}, fmt.Errorf("markov scorer model is nil")

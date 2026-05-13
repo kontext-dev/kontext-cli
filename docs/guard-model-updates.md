@@ -31,6 +31,10 @@ A candidate model should not replace the shipped model unless it improves the ag
 ## Runtime contract
 
 - Model files are local JSON artifacts.
+- Guard activates the configured model into a local snapshot store before
+  loading the in-memory scorer used on the hook hot path.
+- Snapshot metadata records the active model, content hash, activation time, and
+  rollback target.
 - Guard mode must not call a hosted scoring service.
 - Unknown model states must not crash runtime.
 - Deterministic rules remain authoritative for obvious security risk.
