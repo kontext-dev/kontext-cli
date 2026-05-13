@@ -17,8 +17,8 @@ import (
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookcmd"
+	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/run"
-	"github.com/kontext-security/kontext-cli/internal/sidecar"
 	"github.com/kontext-security/kontext-cli/internal/update"
 
 	_ "github.com/kontext-security/kontext-cli/internal/agent/claude"
@@ -211,21 +211,21 @@ func evaluateViaSidecar(socketPath string, event hook.Event) (hook.Result, error
 		return sidecarFailureResult(event, "sidecar deadline error"), nil
 	}
 
-	req, err := sidecar.EvaluateRequestFromEvent(event)
+	req, err := localruntime.EvaluateRequestFromEvent(event)
 	if err != nil {
 		return sidecarFailureResult(event, "sidecar marshal error"), nil
 	}
 
-	if err := sidecar.WriteMessage(conn, req); err != nil {
+	if err := localruntime.WriteMessage(conn, req); err != nil {
 		return sidecarFailureResult(event, "sidecar write error"), nil
 	}
 
-	var result sidecar.EvaluateResult
-	if err := sidecar.ReadMessage(conn, &result); err != nil {
+	var result localruntime.EvaluateResult
+	if err := localruntime.ReadMessage(conn, &result); err != nil {
 		return sidecarFailureResult(event, "sidecar read error"), nil
 	}
 
-	return sidecar.ResultFromEvaluateResult(result), nil
+	return localruntime.ResultFromEvaluateResult(result), nil
 }
 
 func sidecarFailureResult(event hook.Event, reason string) hook.Result {
