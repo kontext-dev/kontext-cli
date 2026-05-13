@@ -43,7 +43,7 @@ Hosted mode owns login, provider connection, short-lived scoped credentials, hos
 
 ```text
 Claude Code
-  -> kontext guard hook claude-code
+  -> kontext hook --agent claude --mode observe
   -> local daemon
   -> deterministic risk rules
   -> Markov-chain risk model

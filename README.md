@@ -118,8 +118,8 @@ kontext guard start
   │
   ├─ Hooks: generated Claude Code settings.json
   │    │
-  │    ├─ PreToolUse        → kontext guard hook claude-code
-  │    ├─ PostToolUse       → kontext guard hook claude-code
+  │    ├─ PreToolUse        → kontext hook --agent claude --mode observe
+  │    ├─ PostToolUse       → kontext hook --agent claude --mode observe
   │
   ├─ Local daemon: 127.0.0.1:4765
   ├─ Risk engine: deterministic rules + Markov-chain score
@@ -139,8 +139,8 @@ kontext start --agent claude
   ├─ Sidecar: Unix socket server + heartbeat loop
   ├─ Hooks: generated Claude Code settings.json
   │    │
-  │    ├─ PreToolUse        → kontext hook → sidecar → ProcessHookEvent
-  │    ├─ PostToolUse       → kontext hook → sidecar → ProcessHookEvent
+  │    ├─ PreToolUse        → kontext hook --agent claude → sidecar → ProcessHookEvent
+  │    ├─ PostToolUse       → kontext hook --agent claude → sidecar → ProcessHookEvent
   │
   └─ Exit: EndSession → credential expiry + temp file cleanup
 ```

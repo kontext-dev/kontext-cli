@@ -226,6 +226,37 @@ func TestInstalledHookCommandUsesStableLauncherOverride(t *testing.T) {
 	}
 }
 
+func TestInstalledHookCommandUsesCanonicalRootHookHandler(t *testing.T) {
+	t.Setenv("KONTEXT_GUARD_HOOK_COMMAND", "")
+
+	got := installedHookCommand()
+	if strings.Contains(got, "guard hook claude-code") {
+		t.Fatalf("hook command used legacy Guard handler: %s", got)
+	}
+	if !strings.Contains(got, "hook --agent claude --mode observe") {
+		t.Fatalf("hook command did not use canonical root handler: %s", got)
+	}
+}
+
+func TestIsGuardHookCommandRecognizesLegacyAndCanonicalObserveHooks(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		"/usr/local/bin/kontext guard hook claude-code",
+		"'/usr/local/bin/kontext' guard hook claude-code",
+		"/usr/local/bin/kontext hook --agent claude --mode observe",
+		"'/usr/local/bin/kontext' hook --agent claude --mode observe",
+		"cd '/repo' && go run ./cmd/kontext hook --agent claude --mode observe",
+	} {
+		if !isGuardHookCommand(command) {
+			t.Fatalf("isGuardHookCommand(%q) = false, want true", command)
+		}
+	}
+	if isGuardHookCommand("/usr/local/bin/kontext hook --agent claude") {
+		t.Fatal("hosted/pass-through hook should not be classified as Guard observe hook")
+	}
+}
+
 func TestMergeHooksInstallsOnlyToolHooks(t *testing.T) {
 	t.Parallel()
 

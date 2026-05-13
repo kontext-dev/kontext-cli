@@ -83,7 +83,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  doctor                        Check local daemon health")
 	fmt.Fprintln(out, "  hooks install claude-code     Install Claude Code hooks")
 	fmt.Fprintln(out, "  hooks uninstall claude-code   Remove Claude Code hooks")
-	fmt.Fprintln(out, "  hook claude-code              Runtime hook adapter")
+	fmt.Fprintln(out, "  hook claude-code              Runtime hook adapter compatibility alias")
 	fmt.Fprintln(out, "  traces inspect                Inspect local trace summary")
 	fmt.Fprintln(out, "  model info                    Print baseline model info")
 	fmt.Fprintln(out, "  model train                   Train a local fixture model")
@@ -303,7 +303,7 @@ func PrintHookStatus(out io.Writer) {
 	for _, raw := range hooks {
 		for _, command := range hookCommands(raw) {
 			switch {
-			case strings.Contains(command, "kontext guard hook claude-code"):
+			case isGuardHookCommand(command):
 				guard = true
 				fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
 			case strings.Contains(command, "kontext hook"):
@@ -506,8 +506,13 @@ func mergeHooks(raw any, hookCommand string) map[string]any {
 }
 
 func isGuardHookEntry(entry any) bool {
-	text := fmt.Sprintf("%v", entry)
-	return strings.Contains(text, "kontext guard hook claude-code")
+	return isGuardHookCommand(fmt.Sprintf("%v", entry))
+}
+
+func isGuardHookCommand(command string) bool {
+	normalized := strings.ReplaceAll(command, "'", "")
+	return strings.Contains(normalized, "kontext guard hook claude-code") ||
+		(strings.Contains(normalized, "kontext hook --agent claude") && strings.Contains(normalized, "--mode observe"))
 }
 
 func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
@@ -717,11 +722,11 @@ func installedHookCommand() string {
 	if strings.Contains(path, "go-build") {
 		if cwd, err := os.Getwd(); err == nil {
 			if _, statErr := os.Stat(filepath.Join(cwd, "cmd", "kontext")); statErr == nil {
-				return fmt.Sprintf("cd %s && go run ./cmd/kontext guard hook claude-code", shellQuote(cwd))
+				return fmt.Sprintf("cd %s && go run ./cmd/kontext hook --agent claude --mode observe", shellQuote(cwd))
 			}
 		}
 	}
-	return fmt.Sprintf("%s guard hook claude-code", shellQuote(path))
+	return fmt.Sprintf("%s hook --agent claude --mode observe", shellQuote(path))
 }
 
 func shellQuote(value string) string {

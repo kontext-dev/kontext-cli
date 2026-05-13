@@ -15,6 +15,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
+	guardhookruntime "github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookcmd"
 	"github.com/kontext-security/kontext-cli/internal/localruntime"
@@ -168,7 +169,11 @@ func newLogoutCmd(clearSession func() error) *cobra.Command {
 }
 
 func hookCmd() *cobra.Command {
-	var agentName string
+	var (
+		agentName  string
+		socketPath string
+		mode       string
+	)
 
 	cmd := &cobra.Command{
 		Use:    "hook",
@@ -181,61 +186,111 @@ func hookCmd() *cobra.Command {
 				os.Exit(2)
 			}
 
-			socketPath := os.Getenv("KONTEXT_SOCKET")
+			resolvedSocketPath := resolveHookSocketPath(socketPath)
+			if mode != "" {
+				hookMode, err := guardhookruntime.ParseMode(mode)
+				if err != nil {
+					return err
+				}
+				adapter := guardhookruntime.AgentAdapter{Agent: a, AgentName: agentName}
+				processor := rootHookProcessor{socketPath: resolvedSocketPath, mode: hookMode}
+				return guardhookruntime.Run(context.Background(), adapter, processor, hookMode, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
+			}
 			hookcmd.Run(a, func(e hook.Event) (hook.Result, error) {
-				return evaluateHookWithSidecar(socketPath, e)
+				return evaluateHookWithSidecar(resolvedSocketPath, e)
 			})
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent type")
+	cmd.Flags().StringVar(&socketPath, "socket", "", "Unix socket path for local hook runtime")
+	cmd.Flags().StringVar(&mode, "mode", os.Getenv("KONTEXT_MODE"), "hook mode: observe or enforce")
 
 	return cmd
 }
 
-func evaluateHookWithSidecar(socketPath string, event hook.Event) (hook.Result, error) {
-	if socketPath == "" {
-		return sidecarFailureResult(event, "sidecar socket missing"), nil
+type rootHookProcessor struct {
+	socketPath string
+	mode       guardhookruntime.Mode
+}
+
+func (p rootHookProcessor) Process(_ context.Context, event hook.Event) (hook.Result, error) {
+	return evaluateHookWithSidecarForMode(p.socketPath, event, string(p.mode))
+}
+
+func resolveHookSocketPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
 	}
-	return evaluateViaSidecar(socketPath, event)
+	if socketPath := os.Getenv("KONTEXT_SOCKET"); socketPath != "" {
+		return socketPath
+	}
+	return localruntime.DefaultSocketPath()
+}
+
+func evaluateHookWithSidecar(socketPath string, event hook.Event) (hook.Result, error) {
+	return evaluateHookWithSidecarForMode(socketPath, event, "")
+}
+
+func evaluateHookWithSidecarForMode(socketPath string, event hook.Event, mode string) (hook.Result, error) {
+	if socketPath == "" {
+		return sidecarFailureResult(event, "sidecar socket missing", mode), nil
+	}
+	return evaluateViaSidecarForMode(socketPath, event, mode)
 }
 
 func evaluateViaSidecar(socketPath string, event hook.Event) (hook.Result, error) {
+	return evaluateViaSidecarForMode(socketPath, event, "")
+}
+
+func evaluateViaSidecarForMode(socketPath string, event hook.Event, mode string) (hook.Result, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
-		return sidecarFailureResult(event, "sidecar unreachable"), nil
+		return sidecarFailureResult(event, "sidecar unreachable", mode), nil
 	}
 	defer conn.Close()
 	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return sidecarFailureResult(event, "sidecar deadline error"), nil
+		return sidecarFailureResult(event, "sidecar deadline error", mode), nil
 	}
 
 	req, err := localruntime.EvaluateRequestFromEvent(event)
 	if err != nil {
-		return sidecarFailureResult(event, "sidecar marshal error"), nil
+		return sidecarFailureResult(event, "sidecar marshal error", mode), nil
 	}
 
 	if err := localruntime.WriteMessage(conn, req); err != nil {
-		return sidecarFailureResult(event, "sidecar write error"), nil
+		return sidecarFailureResult(event, "sidecar write error", mode), nil
 	}
 
 	var result localruntime.EvaluateResult
 	if err := localruntime.ReadMessage(conn, &result); err != nil {
-		return sidecarFailureResult(event, "sidecar read error"), nil
+		return sidecarFailureResult(event, "sidecar read error", mode), nil
 	}
 
 	return localruntime.ResultFromEvaluateResult(result), nil
 }
 
-func sidecarFailureResult(event hook.Event, reason string) hook.Result {
+func sidecarFailureResult(event hook.Event, reason, mode string) hook.Result {
 	if event.HookName != hook.HookPreToolUse {
 		return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
+	}
+	if normalizedHookMode(mode) == "enforce" {
+		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
 	if currentHostedAccessMode() == "enforce" {
 		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
 	return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
+}
+
+func normalizedHookMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "observe", "enforce":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func currentHostedAccessMode() string {
