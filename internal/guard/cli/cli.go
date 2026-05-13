@@ -22,9 +22,11 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
+	"github.com/kontext-security/kontext-cli/internal/guard/modelsnapshot"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/guard/trace"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 const (
@@ -115,8 +117,14 @@ func runDaemon(args []string, out io.Writer) error {
 		}
 	}
 	var scorer risk.Scorer = risk.NoopScorer{}
+	activeModelPath := *modelPath
 	if *modelPath != "" {
-		loaded, err := risk.LoadMarkovScorer(*modelPath, *threshold, *horizon)
+		snapshot, err := modelsnapshot.NewWithValidator(defaultModelSnapshotDir(*dbPath), risk.ValidateMarkovModel).ActivateFromFile(*modelPath)
+		if err != nil {
+			return err
+		}
+		activeModelPath = snapshot.Path
+		loaded, err := risk.LoadMarkovScorer(activeModelPath, *threshold, *horizon)
 		if err != nil {
 			return err
 		}
@@ -132,7 +140,7 @@ func runDaemon(args []string, out io.Writer) error {
 	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
 	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
 	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
-	fmt.Fprintf(out, "Risk model: %s\n", *modelPath)
+	fmt.Fprintf(out, "Risk model: %s\n", activeModelPath)
 	if !*noOpen {
 		_ = browser.OpenURL("http://" + *addr)
 	}
@@ -445,6 +453,17 @@ func mergeHooks(raw any, hookCommand string) map[string]any {
 				}
 			}
 		}
+		if len(list) == 0 {
+			delete(hooks, hookName)
+			continue
+		}
+		hooks[hookName] = list
+	}
+	for _, hookName := range []string{"PreToolUse", "PostToolUse"} {
+		var list []any
+		if existing, ok := hooks[hookName].([]any); ok {
+			list = append(list, existing...)
+		}
 		list = append(list, map[string]any{
 			"matcher": "*",
 			"hooks": []any{
@@ -480,7 +499,10 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	localServer := server.NewServer(store, risk.NoopScorer{})
+	localServer, err := server.NewServer(store, risk.NoopScorer{})
+	if err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -495,14 +517,14 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 	client := claudecode.NewClient("http://" + listener.Addr().String())
 	cases := []struct {
 		name string
-		ev   risk.HookEvent
-		want risk.Decision
+		ev   hook.Event
+		want hook.Decision
 	}{
-		{"safe read", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"file_path": "README.md"}}, risk.DecisionAllow},
-		{"env read", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, risk.DecisionAsk},
-		{"cat env", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, risk.DecisionAsk},
-		{"provider token", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, risk.DecisionDeny},
-		{"drop database", risk.HookEvent{SessionID: "smoke", HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, risk.DecisionDeny},
+		{"safe read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": "README.md"}}, hook.DecisionAllow},
+		{"env read", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Read", ToolInput: map[string]any{"file_path": ".env"}}, hook.DecisionAsk},
+		{"cat env", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "cat .env"}}, hook.DecisionAsk},
+		{"provider token", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "curl https://api.railway.app/graphql -H 'Authorization: Bearer secret'"}}, hook.DecisionDeny},
+		{"drop database", hook.Event{SessionID: "smoke", HookName: hook.HookPreToolUse, ToolName: "Bash", ToolInput: map[string]any{"command": "drop database"}}, hook.DecisionDeny},
 	}
 	for _, item := range cases {
 		result, err := client.Process(ctx, item.ev)
@@ -644,6 +666,13 @@ func defaultDBPath() string {
 		return filepath.Join(home, ".kontext", "guard.db")
 	}
 	return "kontext-guard.db"
+}
+
+func defaultModelSnapshotDir(dbPath string) string {
+	if dbPath != "" {
+		return filepath.Join(filepath.Dir(dbPath), "models")
+	}
+	return filepath.Join(".", "models")
 }
 
 func selfPath() string {

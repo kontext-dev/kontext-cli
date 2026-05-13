@@ -3,17 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/kontext-security/kontext-cli/internal/guard/app/notify"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 const (
@@ -21,9 +20,9 @@ const (
 )
 
 type Server struct {
-	store  *sqlite.Store
-	scorer risk.Scorer
-	mux    *http.ServeMux
+	store *sqlite.Store
+	core  *runtimecore.Core
+	mux   *http.ServeMux
 }
 
 type ProcessResponse struct {
@@ -33,13 +32,25 @@ type ProcessResponse struct {
 	EventID    string        `json:"event_id"`
 }
 
-func NewServer(store *sqlite.Store, scorer risk.Scorer) *Server {
-	if scorer == nil {
-		scorer = risk.NoopScorer{}
+func NewServer(store *sqlite.Store, scorer risk.Scorer) (*Server, error) {
+	return NewServerWithPolicy(store, NewRiskPolicyProvider(scorer))
+}
+
+// NewServerWithPolicy creates a Guard server with an injected policy provider.
+// A nil interface uses the default local risk policy; callers must not pass a
+// typed-nil provider because it still satisfies the PolicyProvider interface.
+func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) (*Server, error) {
+	if policy == nil {
+		policy = NewRiskPolicyProvider(nil)
 	}
-	server := &Server{store: store, scorer: scorer, mux: http.NewServeMux()}
+	runtime := newGuardHookRuntime(store, policy)
+	core, err := runtimecore.New(runtime)
+	if err != nil {
+		return nil, fmt.Errorf("create runtime core: %w", err)
+	}
+	server := &Server{store: store, core: core, mux: http.NewServeMux()}
 	server.routes()
-	return server
+	return server, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -57,6 +68,8 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.mux.HandleFunc("POST /api/hooks/evaluate", s.handleEvaluate)
+	s.mux.HandleFunc("POST /api/hooks/ingest", s.handleIngest)
 	s.mux.HandleFunc("POST /api/hooks/process", s.handleProcess)
 	s.mux.HandleFunc("GET /api/summary", s.handleSummary)
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
@@ -64,37 +77,53 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleDashboard)
 }
 
+func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
+	result, err := s.core.EvaluateHook(ctx, hookEventFromRiskEvent(event))
+	if err != nil {
+		return risk.RiskDecision{}, err
+	}
+	return riskDecisionFromHookResult(result), nil
+}
+
+func (s *Server) IngestEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
+	result, err := s.core.IngestEvent(ctx, hookEventFromRiskEvent(event))
+	if err != nil {
+		return risk.RiskDecision{}, err
+	}
+	return riskDecisionFromHookResult(result), nil
+}
+
 func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	if event.HookEventName == "" {
-		return risk.RiskDecision{}, errors.New("hook_event_name is required")
-	}
-	if event.Timestamp.IsZero() {
-		event.Timestamp = time.Now().UTC()
-	}
-	decision, err := risk.DecideRisk(event, s.scorer)
+	result, err := s.core.ProcessHook(ctx, hookEventFromRiskEvent(event))
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
-	record, err := s.store.SaveDecision(ctx, event, decision)
-	if err != nil {
-		return risk.RiskDecision{}, err
-	}
-	decision.EventID = record.ID
-	notify.Decision(decision)
-	return decision, nil
+	return riskDecisionFromHookResult(result), nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+	s.handleHook(w, r, s.EvaluateHook)
+}
+
+func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+	s.handleHook(w, r, s.IngestEvent)
+}
+
 func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
+	s.handleHook(w, r, s.ProcessHookEvent)
+}
+
+func (s *Server) handleHook(w http.ResponseWriter, r *http.Request, process func(context.Context, risk.HookEvent) (risk.RiskDecision, error)) {
 	var event risk.HookEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid hook event")
 		return
 	}
-	decision, err := s.ProcessHookEvent(r.Context(), event)
+	decision, err := process(r.Context(), event)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -190,5 +219,10 @@ func OpenDefaultServer(dbPath string, scorer risk.Scorer) (*Server, func() error
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
-	return NewServer(store, scorer), store.Close, nil
+	server, err := NewServer(store, scorer)
+	if err != nil {
+		_ = store.Close()
+		return nil, nil, err
+	}
+	return server, store.Close, nil
 }

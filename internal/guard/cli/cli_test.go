@@ -79,6 +79,33 @@ func TestInstalledHookCommandUsesStableLauncherOverride(t *testing.T) {
 	}
 }
 
+func TestMergeHooksInstallsOnlyToolHooks(t *testing.T) {
+	t.Parallel()
+
+	hooks := mergeHooks(map[string]any{
+		"UserPromptSubmit": []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": "/usr/local/bin/kontext guard hook claude-code",
+					},
+				},
+			},
+		},
+	}, "/usr/local/bin/kontext guard hook claude-code")
+
+	if _, ok := hooks["PreToolUse"]; !ok {
+		t.Fatal("PreToolUse hook missing")
+	}
+	if _, ok := hooks["PostToolUse"]; !ok {
+		t.Fatal("PostToolUse hook missing")
+	}
+	if _, ok := hooks["UserPromptSubmit"]; ok {
+		t.Fatal("UserPromptSubmit hook installed, want only tool hooks")
+	}
+}
+
 func TestStartRejectsInvalidNumericEnvironment(t *testing.T) {
 	t.Setenv("KONTEXT_THRESHOLD", "high")
 

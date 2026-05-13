@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +18,23 @@ import (
 	agentv1 "github.com/kontext-security/kontext-cli/gen/kontext/agent/v1"
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 func newTestLogger(buf *bytes.Buffer) diagnostic.Logger {
 	return diagnostic.New(buf, true)
+}
+
+func withRuntimeCore(t *testing.T, s *Server) *Server {
+	t.Helper()
+	core, err := runtimecore.New(s.hostedRuntime())
+	if err != nil {
+		t.Fatalf("runtimecore.New() error = %v", err)
+	}
+	s.core = core
+	return s
 }
 
 func TestHeartbeatDeduplication(t *testing.T) {
@@ -112,30 +125,18 @@ func TestAcceptLoopReturnsOnListenerError(t *testing.T) {
 	}
 }
 
-func TestDefaultAllowResultOmitsPlaceholderReason(t *testing.T) {
-	t.Parallel()
-
-	result := defaultAllowResult()
-	if !result.Allowed {
-		t.Fatal("defaultAllowResult().Allowed = false, want true")
-	}
-	if result.Reason != "" {
-		t.Fatalf("defaultAllowResult().Reason = %q, want empty", result.Reason)
-	}
-}
-
 func TestIngestEventRefreshesAccessMode(t *testing.T) {
 	t.Parallel()
 
 	modePath := filepath.Join(t.TempDir(), "access-mode")
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   modePath,
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     &stubProcessor{result: &backend.ProcessHookEventResult{AccessMode: backend.HostedAccessModeEnforce}},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	s.ingestEvent(context.Background(), &EvaluateRequest{HookEvent: "PostToolUse"})
 
@@ -148,6 +149,66 @@ func TestIngestEventRefreshesAccessMode(t *testing.T) {
 	}
 	if string(data) != string(backend.HostedAccessModeEnforce) {
 		t.Fatalf("access mode file = %q, want enforce", data)
+	}
+}
+
+func TestNewInitializesRuntimeCore(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(
+		t.TempDir(),
+		&stubProcessor{},
+		"session-123",
+		"claude",
+		backend.HostedAccessModeNoPolicy,
+		diagnostic.New(io.Discard, false),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if s.core == nil {
+		t.Fatal("core = nil, want runtime core initialized")
+	}
+}
+
+func TestEvaluatePreToolUseUsesRuntimeCore(t *testing.T) {
+	t.Parallel()
+
+	client := &stubProcessor{
+		result: &backend.ProcessHookEventResult{
+			Response: &agentv1.ProcessHookEventResponse{
+				Decision: agentv1.Decision_DECISION_DENY,
+				Reason:   "blocked by runtime",
+			},
+			AccessMode: backend.HostedAccessModeEnforce,
+		},
+	}
+	s, err := New(
+		t.TempDir(),
+		client,
+		"session-123",
+		"claude",
+		backend.HostedAccessModeEnforce,
+		diagnostic.New(io.Discard, false),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolName:  "Bash",
+		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
+	})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if result.Reason != "blocked by runtime" {
+		t.Fatalf("evaluate().Reason = %q, want runtime decision reason", result.Reason)
+	}
+	if client.processCalls != 1 {
+		t.Fatalf("ProcessHookEvent calls = %d, want 1", client.processCalls)
 	}
 }
 
@@ -166,12 +227,12 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 			PolicySetEpoch: "4",
 		},
 	}
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID: "session-123",
 		agentName: "claude",
 		modePath:  filepath.Join(t.TempDir(), "access-mode"),
 		client:    client,
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
@@ -196,7 +257,7 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
@@ -212,7 +273,7 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 			},
 		},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
@@ -230,16 +291,16 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 		t.Fatalf("evaluate().RequestID = %q, want request-123", result.RequestID)
 	}
 
-	claudeOutput, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
-		Decision:  hookruntime.Decision(result.Decision),
+	claudeOutput, err := hookruntime.EncodeClaudeResult("PreToolUse", hook.Result{
+		Decision:  hook.Decision(result.Decision),
 		Reason:    result.Reason,
 		RequestID: result.RequestID,
 	})
 	if err != nil {
 		t.Fatalf("EncodeClaudeResult() error = %v", err)
 	}
-	if !strings.Contains(string(claudeOutput), `"permissionDecision":"deny"`) {
-		t.Fatalf("claude output = %s, want deny", claudeOutput)
+	if !strings.Contains(string(claudeOutput), `"permissionDecision":"ask"`) {
+		t.Fatalf("claude output = %s, want ask", claudeOutput)
 	}
 	if strings.Count(string(claudeOutput), "Request ID: request-123") != 1 {
 		t.Fatalf("claude output = %s, want one request id", claudeOutput)
@@ -259,7 +320,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := &Server{
+			s := withRuntimeCore(t, &Server{
 				sessionID:  "session-123",
 				agentName:  "claude",
 				modePath:   filepath.Join(t.TempDir(), "access-mode"),
@@ -277,7 +338,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 					},
 				},
 				diagnostic: diagnostic.New(io.Discard, false),
-			}
+			})
 
 			result := s.evaluate(context.Background(), &EvaluateRequest{
 				HookEvent: "PreToolUse",
@@ -288,7 +349,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 			if !result.Allowed {
 				t.Fatalf("evaluate().Allowed = false, want true for %s in no_policy mode", tc.name)
 			}
-			if result.Decision != hookruntime.DecisionAllow {
+			if result.Decision != string(hook.DecisionAllow) {
 				t.Fatalf("evaluate().Decision = %q, want allow", result.Decision)
 			}
 			if result.Reason != "backend observed a block" {
@@ -304,7 +365,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
@@ -319,7 +380,7 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 			},
 		},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{
 		HookEvent: "PreToolUse",
@@ -330,7 +391,7 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 	if result.Allowed {
 		t.Fatal("evaluate().Allowed = true, want false")
 	}
-	if result.Decision != hookruntime.DecisionDeny {
+	if result.Decision != string(hook.DecisionDeny) {
 		t.Fatalf("evaluate().Decision = %q, want deny", result.Decision)
 	}
 	if result.Mode != string(backend.HostedAccessModeEnforce) {
@@ -341,13 +402,13 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		accessMode: backend.HostedAccessModeEnforce,
 		client:     &stubProcessor{err: errors.New("backend down")},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 
@@ -359,16 +420,64 @@ func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 	}
 }
 
-func TestEvaluatePreToolUseFailsClosedBeforeClaudeHookDeadline(t *testing.T) {
+func TestEvaluateFailsClosedWhenBlockingHookPayloadCannotDecode(t *testing.T) {
 	t.Parallel()
 
 	s := &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		accessMode: backend.HostedAccessModeEnforce,
-		client:     &stubProcessor{delay: hookEvalTimeout + time.Second},
+		client:     &stubProcessor{},
 		diagnostic: diagnostic.New(io.Discard, false),
 	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PreToolUse",
+		ToolInput: json.RawMessage(`{`),
+	})
+
+	if result.Allowed {
+		t.Fatal("evaluate().Allowed = true, want false")
+	}
+	if result.Decision != string(hook.DecisionDeny) {
+		t.Fatalf("evaluate().Decision = %q, want deny", result.Decision)
+	}
+}
+
+func TestEvaluateAllowsNonblockingHookPayloadDecodeFailure(t *testing.T) {
+	t.Parallel()
+
+	s := &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     &stubProcessor{},
+		diagnostic: diagnostic.New(io.Discard, false),
+	}
+
+	result := s.evaluate(context.Background(), &EvaluateRequest{
+		HookEvent: "PostToolUse",
+		ToolInput: json.RawMessage(`{`),
+	})
+
+	if !result.Allowed {
+		t.Fatal("evaluate().Allowed = false, want true")
+	}
+	if result.Decision != string(hook.DecisionAllow) {
+		t.Fatalf("evaluate().Decision = %q, want allow", result.Decision)
+	}
+}
+
+func TestEvaluatePreToolUseFailsClosedBeforeClaudeHookDeadline(t *testing.T) {
+	t.Parallel()
+
+	s := withRuntimeCore(t, &Server{
+		sessionID:  "session-123",
+		agentName:  "claude",
+		accessMode: backend.HostedAccessModeEnforce,
+		client:     &stubProcessor{delay: hookEvalTimeout + time.Second},
+		diagnostic: diagnostic.New(io.Discard, false),
+	})
 
 	start := time.Now()
 	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
@@ -422,13 +531,13 @@ func TestEvaluatePreToolUseFailsClosedWhenEnforceModeCannotPersist(t *testing.T)
 func TestEvaluatePreToolUseFailsOpenWhenNotEnforcing(t *testing.T) {
 	t.Parallel()
 
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     &stubProcessor{err: errors.New("backend down")},
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 
@@ -451,14 +560,14 @@ func TestEvaluateRefreshesAccessModeForLaterFailures(t *testing.T) {
 			AccessMode: backend.HostedAccessModeEnforce,
 		},
 	}
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeNoPolicy,
 		client:     client,
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	first := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
@@ -483,14 +592,14 @@ func TestEvaluateRefreshesAccessModeBackToFailOpen(t *testing.T) {
 			AccessMode: backend.HostedAccessModeNoPolicy,
 		},
 	}
-	s := &Server{
+	s := withRuntimeCore(t, &Server{
 		sessionID:  "session-123",
 		agentName:  "claude",
 		modePath:   filepath.Join(t.TempDir(), "access-mode"),
 		accessMode: backend.HostedAccessModeEnforce,
 		client:     client,
 		diagnostic: diagnostic.New(io.Discard, false),
-	}
+	})
 
 	first := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
@@ -529,11 +638,13 @@ func TestBuildHookEventRequestPreservesTelemetryPayload(t *testing.T) {
 	toolResponse := json.RawMessage(`{"stdout":"/tmp/project"}`)
 	isInterrupt := true
 	durationMs := int64(42)
-	req := &EvaluateRequest{
-		HookEvent:      "PostToolUse",
+	event := hook.Event{
+		SessionID:      "session-123",
+		Agent:          "claude",
+		HookName:       hook.HookPostToolUse,
 		ToolName:       "Bash",
-		ToolInput:      toolInput,
-		ToolResponse:   toolResponse,
+		ToolInput:      map[string]any{"command": "pwd"},
+		ToolResponse:   map[string]any{"stdout": "/tmp/project"},
 		ToolUseID:      "toolu_123",
 		CWD:            "/tmp/project",
 		PermissionMode: "acceptEdits",
@@ -542,33 +653,29 @@ func TestBuildHookEventRequestPreservesTelemetryPayload(t *testing.T) {
 		IsInterrupt:    &isInterrupt,
 	}
 
-	got := buildHookEventRequest("session-123", "claude", req)
+	got := buildHookEventRequestFromEvent(event)
 	if got.SessionId != "session-123" ||
 		got.Agent != "claude" ||
-		got.HookEvent != req.HookEvent ||
-		got.ToolName != req.ToolName ||
-		got.ToolUseId != req.ToolUseID ||
-		got.Cwd != req.CWD {
+		got.HookEvent != event.HookName.String() ||
+		got.ToolName != event.ToolName ||
+		got.ToolUseId != event.ToolUseID ||
+		got.Cwd != event.CWD {
 		t.Fatalf("buildHookEventRequest() = %+v, want copied metadata", got)
 	}
-	if got.GetPermissionMode() != req.PermissionMode {
-		t.Fatalf("PermissionMode = %q, want %q", got.GetPermissionMode(), req.PermissionMode)
+	if got.GetPermissionMode() != event.PermissionMode {
+		t.Fatalf("PermissionMode = %q, want %q", got.GetPermissionMode(), event.PermissionMode)
 	}
-	if got.GetDurationMs() != *req.DurationMs {
-		t.Fatalf("DurationMs = %d, want %d", got.GetDurationMs(), *req.DurationMs)
+	if got.GetDurationMs() != *event.DurationMs {
+		t.Fatalf("DurationMs = %d, want %d", got.GetDurationMs(), *event.DurationMs)
 	}
-	if got.GetError() != req.Error {
-		t.Fatalf("Error = %q, want %q", got.GetError(), req.Error)
+	if got.GetError() != event.Error {
+		t.Fatalf("Error = %q, want %q", got.GetError(), event.Error)
 	}
-	if got.GetIsInterrupt() != *req.IsInterrupt {
-		t.Fatalf("IsInterrupt = %t, want %t", got.GetIsInterrupt(), *req.IsInterrupt)
+	if got.GetIsInterrupt() != *event.IsInterrupt {
+		t.Fatalf("IsInterrupt = %t, want %t", got.GetIsInterrupt(), *event.IsInterrupt)
 	}
-	if string(got.ToolInput) != string(toolInput) {
-		t.Fatalf("ToolInput = %s, want %s", got.ToolInput, toolInput)
-	}
-	if string(got.ToolResponse) != string(toolResponse) {
-		t.Fatalf("ToolResponse = %s, want %s", got.ToolResponse, toolResponse)
-	}
+	assertJSONEqual(t, got.ToolInput, toolInput)
+	assertJSONEqual(t, got.ToolResponse, toolResponse)
 }
 
 func TestBuildHookEventRequestEnrichesBashPreToolUseWithGitContext(t *testing.T) {
@@ -587,11 +694,13 @@ func TestBuildHookEventRequestEnrichesBashPreToolUseWithGitContext(t *testing.T)
 	runTestGit(t, repoDir, "-c", "user.name=Kontext Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
 	runTestGit(t, repoDir, "remote", "add", "origin", "https://token:x-oauth-basic@github.com/kontext-security/kontext-cli.git")
 
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent: "PreToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID: "session-123",
+		Agent:     "claude",
+		HookName:  hook.HookPreToolUse,
 		ToolName:  "Bash",
 		CWD:       repoDir,
-		ToolInput: json.RawMessage(`{"command":"git push --dry-run origin HEAD:test-kontext-access-smoke"}`),
+		ToolInput: map[string]any{"command": "git push --dry-run origin HEAD:test-kontext-access-smoke"},
 	})
 
 	var input map[string]any
@@ -633,11 +742,13 @@ func TestBuildHookEventRequestUsesTrustedGitExecutableForContext(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent: "PreToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID: "session-123",
+		Agent:     "claude",
+		HookName:  hook.HookPreToolUse,
 		ToolName:  "Bash",
 		CWD:       repoDir,
-		ToolInput: json.RawMessage(`{"command":"git status"}`),
+		ToolInput: map[string]any{"command": "git status"},
 	})
 
 	var input map[string]any
@@ -675,16 +786,16 @@ func TestBuildHookEventRequestDoesNotEnrichNonPreToolUsePayloads(t *testing.T) {
 	t.Parallel()
 
 	toolInput := json.RawMessage(`{"command":"git push origin main"}`)
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent: "PostToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID: "session-123",
+		Agent:     "claude",
+		HookName:  hook.HookPostToolUse,
 		ToolName:  "Bash",
 		CWD:       t.TempDir(),
-		ToolInput: toolInput,
+		ToolInput: map[string]any{"command": "git push origin main"},
 	})
 
-	if string(got.ToolInput) != string(toolInput) {
-		t.Fatalf("ToolInput = %s, want unchanged %s", got.ToolInput, toolInput)
-	}
+	assertJSONEqual(t, got.ToolInput, toolInput)
 }
 
 func runTestGit(t *testing.T, cwd string, args ...string) {
@@ -711,8 +822,10 @@ func TestBuildHookEventRequestPreservesExplicitFalseInterrupt(t *testing.T) {
 	t.Parallel()
 
 	isInterrupt := false
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent:   "PostToolUseFailure",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID:   "session-123",
+		Agent:       "claude",
+		HookName:    hook.HookPostToolUseFailed,
 		ToolName:    "Bash",
 		ToolUseID:   "toolu_123",
 		IsInterrupt: &isInterrupt,
@@ -730,8 +843,10 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	t.Parallel()
 
 	durationMs := int64(0)
-	got := buildHookEventRequest("session-123", "claude", &EvaluateRequest{
-		HookEvent:  "PostToolUse",
+	got := buildHookEventRequestFromEvent(hook.Event{
+		SessionID:  "session-123",
+		Agent:      "claude",
+		HookName:   hook.HookPostToolUse,
 		ToolName:   "Bash",
 		ToolUseID:  "toolu_123",
 		DurationMs: &durationMs,
@@ -742,6 +857,22 @@ func TestBuildHookEventRequestPreservesExplicitZeroDuration(t *testing.T) {
 	}
 	if got.GetDurationMs() != 0 {
 		t.Fatalf("DurationMs = %d, want 0", got.GetDurationMs())
+	}
+}
+
+func assertJSONEqual(t *testing.T, got, want []byte) {
+	t.Helper()
+
+	var gotValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("got JSON = %s: %v", got, err)
+	}
+	var wantValue any
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("want JSON = %s: %v", want, err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("JSON = %s, want %s", got, want)
 	}
 }
 

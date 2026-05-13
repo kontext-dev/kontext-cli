@@ -1,25 +1,52 @@
-package hookruntime
+package hook
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/kontext-security/kontext-cli/internal/agent"
 )
+
+type HookName string
+
+const (
+	HookPreToolUse        HookName = "PreToolUse"
+	HookPostToolUse       HookName = "PostToolUse"
+	HookPostToolUseFailed HookName = "PostToolUseFailure"
+	HookUserPromptSubmit  HookName = "UserPromptSubmit"
+)
+
+func (h HookName) String() string {
+	return string(h)
+}
+
+func (h HookName) CanBlock() bool {
+	return h == HookPreToolUse
+}
 
 type Decision string
 
 const (
-	DecisionAllow Decision = "ALLOW"
-	DecisionAsk   Decision = "ASK"
-	DecisionDeny  Decision = "DENY"
+	DecisionAllow Decision = "allow"
+	DecisionAsk   Decision = "ask"
+	DecisionDeny  Decision = "deny"
 )
+
+func NormalizeDecision(value string) (Decision, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(DecisionAllow):
+		return DecisionAllow, true
+	case string(DecisionAsk):
+		return DecisionAsk, true
+	case string(DecisionDeny):
+		return DecisionDeny, true
+	default:
+		return "", false
+	}
+}
 
 type Event struct {
 	SessionID      string
 	Agent          string
-	HookEventName  string
+	HookName       HookName
 	ToolName       string
 	ToolInput      map[string]any
 	ToolResponse   map[string]any
@@ -36,40 +63,28 @@ type Result struct {
 	Reason       string
 	ReasonCode   string
 	RequestID    string
+	EventID      string
 	Mode         string
 	Epoch        string
 	UpdatedInput map[string]any
+	metadata     any
 }
 
-func EventFromAgent(agentName string, event *agent.HookEvent) Event {
-	if event == nil {
-		return Event{Agent: agentName}
-	}
-	return Event{
-		SessionID:      event.SessionID,
-		Agent:          agentName,
-		HookEventName:  event.HookEventName,
-		ToolName:       event.ToolName,
-		ToolInput:      event.ToolInput,
-		ToolResponse:   event.ToolResponse,
-		ToolUseID:      event.ToolUseID,
-		CWD:            event.CWD,
-		PermissionMode: event.PermissionMode,
-		DurationMs:     event.DurationMs,
-		Error:          event.Error,
-		IsInterrupt:    event.IsInterrupt,
-	}
+func WithMetadata(result Result, metadata any) Result {
+	result.metadata = metadata
+	return result
 }
 
-func ResultFromBool(allowed bool, reason string) Result {
-	if allowed {
-		return Result{Decision: DecisionAllow, Reason: reason}
-	}
-	return Result{Decision: DecisionDeny, Reason: reason}
+func (r Result) Metadata() any {
+	return r.metadata
 }
 
 func (r Result) Allowed() bool {
 	return r.Decision == DecisionAllow
+}
+
+func (r Result) Blocking() bool {
+	return r.Decision == DecisionAsk || r.Decision == DecisionDeny
 }
 
 func (r Result) ClaudeReason() string {
@@ -94,15 +109,4 @@ func (r Result) ClaudeReason() string {
 
 func containsRequestID(reason string) bool {
 	return strings.Contains(strings.ToLower(reason), "request id")
-}
-
-func MarshalMap(value map[string]any) (json.RawMessage, error) {
-	if value == nil {
-		return nil, nil
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
 }

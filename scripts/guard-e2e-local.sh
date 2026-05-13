@@ -74,6 +74,29 @@ process.stdin.on("end", () => {
   echo "ok ${name}: ${expected_phrase}"
 }
 
+assert_telemetry_hook() {
+  local name="$1"
+  local payload="$2"
+  local output
+
+  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --daemon-url "$BASE_URL")"
+  node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => raw += chunk);
+process.stdin.on("end", () => {
+  const payload = JSON.parse(raw);
+  const output = payload.hookSpecificOutput ?? {};
+  if (output.permissionDecision) {
+    throw new Error(`expected telemetry hook to omit permissionDecision, got ${output.permissionDecision}`);
+  }
+  if (payload.suppressOutput !== true) {
+    throw new Error(`expected telemetry hook to suppress output, got ${JSON.stringify(payload)}`);
+  }
+});
+' <<<"$output"
+  echo "ok ${name}: telemetry recorded"
+}
+
 assert_hook \
   "safe read" \
   "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"README.md\"}}" \
@@ -92,11 +115,9 @@ assert_hook \
   "direct infrastructure API call included credential material" \
   "would deny"
 
-assert_hook \
+assert_telemetry_hook \
   "async telemetry" \
-  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}" \
-  "async telemetry event recorded" \
-  "would allow"
+  "{\"session_id\":\"${SESSION_ID}\",\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git status\"}}"
 
 echo "==> checking API summary and persisted events"
 curl -fsS "${BASE_URL}/api/summary" | node -e '

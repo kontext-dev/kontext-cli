@@ -2,12 +2,10 @@ package hookruntime
 
 import (
 	"errors"
-	"fmt"
 	"io"
-	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
-	"github.com/kontext-security/kontext-cli/internal/guard/risk"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 type AgentAdapter struct {
@@ -15,62 +13,35 @@ type AgentAdapter struct {
 	AgentName string
 }
 
-func (a AgentAdapter) Decode(r io.Reader) (Event, error) {
+func (a AgentAdapter) Decode(r io.Reader) (hook.Event, error) {
 	if a.Agent == nil {
-		return Event{}, errors.New("agent adapter missing agent")
+		return hook.Event{}, errors.New("agent adapter missing agent")
 	}
 	input, err := io.ReadAll(r)
 	if err != nil {
-		return Event{}, err
+		return hook.Event{}, err
 	}
-	agentEvent, err := a.Agent.DecodeHookInput(input)
+	event, err := a.Agent.DecodeHookInput(input)
 	if err != nil {
-		return Event{}, err
+		return hook.Event{}, err
 	}
-	event := risk.HookEvent{
-		SessionID:     agentEvent.SessionID,
-		Agent:         a.outputAgentName(),
-		HookEventName: agentEvent.HookEventName,
-		ToolName:      agentEvent.ToolName,
-		ToolInput:     agentEvent.ToolInput,
-		ToolResponse:  agentEvent.ToolResponse,
-		ToolUseID:     agentEvent.ToolUseID,
-		CWD:           agentEvent.CWD,
-		Timestamp:     time.Now().UTC(),
-	}
-	if event.HookEventName == "" {
-		return Event{}, errors.New("hook event name missing")
+	if a.outputAgentName() != "" {
+		event.Agent = a.outputAgentName()
 	}
 	if event.SessionID == "" {
 		event.SessionID = "local"
 	}
-	return Event{
-		HookName:  event.HookEventName,
-		CanBlock:  event.HookEventName == "PreToolUse",
-		RiskEvent: event,
-	}, nil
+	if event.HookName == "" {
+		return hook.Event{}, errors.New("hook event name missing")
+	}
+	return event, nil
 }
 
-func (a AgentAdapter) Encode(out io.Writer, result Result) error {
+func (a AgentAdapter) Encode(out io.Writer, event hook.Event, result hook.Result) error {
 	if a.Agent == nil {
 		return errors.New("agent adapter missing agent")
 	}
-	event := &agent.HookEvent{HookEventName: result.HookName}
-	reason := formatReason(result.Decision, result.Reason, result.Mode)
-	var (
-		payload []byte
-		err     error
-	)
-	if result.Mode == ModeEnforce && result.CanBlock {
-		switch result.Decision {
-		case risk.DecisionAsk, risk.DecisionDeny:
-			payload, err = a.Agent.EncodeDeny(event, reason)
-		default:
-			payload, err = a.Agent.EncodeAllow(event, reason, nil)
-		}
-	} else {
-		payload, err = a.Agent.EncodeAllow(event, reason, nil)
-	}
+	payload, err := a.Agent.EncodeHookResult(event, result)
 	if err != nil {
 		return err
 	}
@@ -78,8 +49,8 @@ func (a AgentAdapter) Encode(out io.Writer, result Result) error {
 	return err
 }
 
-func (a AgentAdapter) MalformedHookName() string {
-	return "PreToolUse"
+func (a AgentAdapter) MalformedHookName() hook.HookName {
+	return hook.HookPreToolUse
 }
 
 func (a AgentAdapter) outputAgentName() string {
@@ -90,16 +61,6 @@ func (a AgentAdapter) outputAgentName() string {
 		return a.Agent.Name()
 	}
 	return ""
-}
-
-func formatReason(decision risk.Decision, reason string, mode Mode) string {
-	if reason == "" {
-		reason = "no reason provided"
-	}
-	if mode == ModeObserve {
-		return fmt.Sprintf("Kontext observe mode: would %s; %s", decision, reason)
-	}
-	return reason
 }
 
 var _ Adapter = AgentAdapter{}

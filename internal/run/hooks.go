@@ -41,9 +41,8 @@ func GenerateSettings(sessionDir, kontextBinary, agentName string) (string, erro
 
 	settings := claudeSettings{
 		Hooks: map[string][]hookGroup{
-			"PreToolUse":       commandHookGroups(hookCmd),
-			"PostToolUse":      commandHookGroups(hookCmd),
-			"UserPromptSubmit": commandHookGroups(hookCmd),
+			"PreToolUse":  commandHookGroups(hookCmd),
+			"PostToolUse": commandHookGroups(hookCmd),
 		},
 	}
 

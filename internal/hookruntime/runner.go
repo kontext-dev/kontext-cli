@@ -3,20 +3,22 @@ package hookruntime
 import (
 	"fmt"
 	"io"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 type Codec interface {
-	DecodeHookEvent([]byte) (Event, error)
-	EncodeHookResult(Event, Result) ([]byte, error)
+	DecodeHookEvent([]byte) (hook.Event, error)
+	EncodeHookResult(hook.Event, hook.Result) ([]byte, error)
 }
 
 type Sink interface {
-	ProcessHookEvent(Event) (Result, error)
+	ProcessHookEvent(hook.Event) (hook.Result, error)
 }
 
-type SinkFunc func(Event) (Result, error)
+type SinkFunc func(hook.Event) (hook.Result, error)
 
-func (f SinkFunc) ProcessHookEvent(event Event) (Result, error) {
+func (f SinkFunc) ProcessHookEvent(event hook.Event) (hook.Result, error) {
 	return f(event)
 }
 
@@ -46,12 +48,6 @@ func Run(stdin io.Reader, stdout, stderr io.Writer, codec Codec, sink Sink) int 
 	}
 	if _, err := stdout.Write(out); err != nil {
 		fmt.Fprintf(stderr, "kontext: failed to write hook output: %v\n", err)
-		return 2
-	}
-	if result.Decision == DecisionAsk || result.Decision == DecisionDeny {
-		if reason := result.ClaudeReason(); reason != "" {
-			fmt.Fprintln(stderr, reason)
-		}
 		return 2
 	}
 	return 0

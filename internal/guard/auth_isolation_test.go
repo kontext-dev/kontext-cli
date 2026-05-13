@@ -32,7 +32,7 @@ func TestGuardRuntimeDoesNotImportHostedRuntime(t *testing.T) {
 		for _, imported := range file.Imports {
 			value := strings.Trim(imported.Path.Value, `"`)
 			for _, blocked := range disallowed {
-				if strings.HasPrefix(value, blocked) {
+				if value == blocked || strings.HasPrefix(value, blocked+"/") {
 					t.Fatalf("Guard local mode must not import hosted runtime package %q from %s", value, path)
 				}
 			}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,7 +16,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/auth"
 	guardcli "github.com/kontext-security/kontext-cli/internal/guard/cli"
 	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext-cli/internal/hookcmd"
 	"github.com/kontext-security/kontext-cli/internal/run"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 	"github.com/kontext-security/kontext-cli/internal/update"
@@ -181,15 +182,8 @@ func hookCmd() *cobra.Command {
 			}
 
 			socketPath := os.Getenv("KONTEXT_SOCKET")
-			if socketPath == "" {
-				hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
-					return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: "no sidecar"}, nil
-				})
-				return nil
-			}
-
-			hook.Run(a, func(e *agent.HookEvent) (hookruntime.Result, error) {
-				return evaluateViaSidecar(socketPath, hookruntime.EventFromAgent(agentName, e))
+			hookcmd.Run(a, func(e hook.Event) (hook.Result, error) {
+				return evaluateHookWithSidecar(socketPath, e)
 			})
 			return nil
 		},
@@ -200,7 +194,14 @@ func hookCmd() *cobra.Command {
 	return cmd
 }
 
-func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime.Result, error) {
+func evaluateHookWithSidecar(socketPath string, event hook.Event) (hook.Result, error) {
+	if socketPath == "" {
+		return sidecarFailureResult(event, "sidecar socket missing"), nil
+	}
+	return evaluateViaSidecar(socketPath, event)
+}
+
+func evaluateViaSidecar(socketPath string, event hook.Event) (hook.Result, error) {
 	conn, err := net.DialTimeout("unix", socketPath, 5*time.Second)
 	if err != nil {
 		return sidecarFailureResult(event, "sidecar unreachable"), nil
@@ -210,32 +211,9 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 		return sidecarFailureResult(event, "sidecar deadline error"), nil
 	}
 
-	req := sidecar.EvaluateRequest{
-		Type:           "evaluate",
-		Agent:          event.Agent,
-		HookEvent:      event.HookEventName,
-		ToolName:       event.ToolName,
-		ToolUseID:      event.ToolUseID,
-		CWD:            event.CWD,
-		PermissionMode: event.PermissionMode,
-		DurationMs:     event.DurationMs,
-		Error:          event.Error,
-		IsInterrupt:    event.IsInterrupt,
-	}
-
-	if event.ToolInput != nil {
-		data, err := hookruntime.MarshalMap(event.ToolInput)
-		if err != nil {
-			return sidecarFailureResult(event, "sidecar marshal error"), nil
-		}
-		req.ToolInput = data
-	}
-	if event.ToolResponse != nil {
-		data, err := hookruntime.MarshalMap(event.ToolResponse)
-		if err != nil {
-			return sidecarFailureResult(event, "sidecar marshal error"), nil
-		}
-		req.ToolResponse = data
+	req, err := sidecar.EvaluateRequestFromEvent(event)
+	if err != nil {
+		return sidecarFailureResult(event, "sidecar marshal error"), nil
 	}
 
 	if err := sidecar.WriteMessage(conn, req); err != nil {
@@ -247,43 +225,42 @@ func evaluateViaSidecar(socketPath string, event hookruntime.Event) (hookruntime
 		return sidecarFailureResult(event, "sidecar read error"), nil
 	}
 
-	decision := result.Decision
-	if decision == "" {
-		decision = hookruntime.ResultFromBool(result.Allowed, result.Reason).Decision
-	}
-	return hookruntime.Result{
-		Decision:     decision,
-		Reason:       result.Reason,
-		ReasonCode:   result.ReasonCode,
-		RequestID:    result.RequestID,
-		Mode:         result.Mode,
-		Epoch:        result.Epoch,
-		UpdatedInput: result.UpdatedInput,
-	}, nil
+	return sidecar.ResultFromEvaluateResult(result), nil
 }
 
-func sidecarFailureResult(event hookruntime.Event, reason string) hookruntime.Result {
-	if event.HookEventName != "PreToolUse" {
-		return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
+func sidecarFailureResult(event hook.Event, reason string) hook.Result {
+	if event.HookName != hook.HookPreToolUse {
+		return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
 	}
 	if currentHostedAccessMode() == "enforce" {
-		return hookruntime.Result{Decision: hookruntime.DecisionDeny, Reason: reason, Mode: "enforce"}
+		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
-	return hookruntime.Result{Decision: hookruntime.DecisionAllow, Reason: reason}
+	return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
 }
 
 func currentHostedAccessMode() string {
-	mode := os.Getenv("KONTEXT_ACCESS_MODE")
+	if modePath := os.Getenv("KONTEXT_ACCESS_MODE_PATH"); modePath != "" {
+		data, err := os.ReadFile(modePath)
+		if err != nil {
+			return "enforce"
+		}
+		if mode := normalizedHostedAccessMode(string(data)); mode != "" {
+			return mode
+		}
+		return "enforce"
+	}
+	return normalizedHostedAccessMode(os.Getenv("KONTEXT_ACCESS_MODE"))
+}
+
+func normalizedHostedAccessMode(value string) string {
+	mode := strings.TrimSpace(value)
 	if mode == "disabled" || mode == "no_policy" {
 		return mode
 	}
 	if mode == "enforce" {
 		return "enforce"
 	}
-	if os.Getenv("KONTEXT_ACCESS_MODE_PATH") != "" {
-		return "enforce"
-	}
-	return mode
+	return ""
 }
 
 // isInteractivePrompt reports whether both stdin (where the answer is read)

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
 )
 
@@ -83,7 +83,7 @@ func TestDecodeHookInputPreservesLegacyAliases(t *testing.T) {
 		t.Fatalf("DecodeHookInput() error = %v", err)
 	}
 	if event.SessionID != "s1" ||
-		event.HookEventName != "PreToolUse" ||
+		event.HookName != hook.HookPreToolUse ||
 		event.ToolName != "Read" ||
 		event.ToolUseID != "toolu_123" ||
 		event.ToolInput["file_path"] != "README.md" {
@@ -98,8 +98,8 @@ func TestDecodeHookInputPreservesLegacyHookEventAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeHookInput() error = %v", err)
 	}
-	if event.HookEventName != "PreToolUse" {
-		t.Fatalf("HookEventName = %q, want PreToolUse", event.HookEventName)
+	if event.HookName != hook.HookPreToolUse {
+		t.Fatalf("HookName = %q, want PreToolUse", event.HookName)
 	}
 }
 
@@ -112,6 +112,18 @@ func TestDecodeHookInputAllowsMissingOptionalMetadata(t *testing.T) {
 	}
 	if event.PermissionMode != "" || event.DurationMs != nil || event.Error != "" || event.IsInterrupt != nil {
 		t.Fatalf("optional metadata = %+v, want zero values", event)
+	}
+}
+
+func TestDecodeHookInputRejectsMissingHookEventName(t *testing.T) {
+	t.Parallel()
+
+	_, err := (&Claude{}).DecodeHookInput([]byte(`{"tool_name":"Read"}`))
+	if err == nil {
+		t.Fatal("DecodeHookInput() error = nil, want missing hook event name error")
+	}
+	if !strings.Contains(err.Error(), "hook event name missing") {
+		t.Fatalf("DecodeHookInput() error = %v, want missing hook event name", err)
 	}
 }
 
@@ -145,58 +157,67 @@ func TestDecodeHookInputPreservesExplicitZeroDuration(t *testing.T) {
 func TestEncodeAllowOmitsPlaceholderReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "allowed", nil)
+	out, err := (&Claude{}).EncodeHookResult(
+		hook.Event{HookName: hook.HookPreToolUse},
+		hook.Result{Decision: hook.DecisionAllow, Reason: "allowed"},
+	)
 	if err != nil {
-		t.Fatalf("EncodeAllow() error = %v", err)
+		t.Fatalf("EncodeHookResult() error = %v", err)
 	}
 	if strings.Contains(string(out), "permissionDecisionReason") {
-		t.Fatalf("EncodeAllow() = %s, want no placeholder reason", out)
+		t.Fatalf("EncodeHookResult() = %s, want no placeholder reason", out)
 	}
 }
 
 func TestEncodeAllowKeepsMeaningfulReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(&agent.HookEvent{HookEventName: "PreToolUse"}, "Allowed by read-only policy", nil)
+	out, err := (&Claude{}).EncodeHookResult(
+		hook.Event{HookName: hook.HookPreToolUse},
+		hook.Result{Decision: hook.DecisionAllow, Reason: "Allowed by read-only policy"},
+	)
 	if err != nil {
-		t.Fatalf("EncodeAllow() error = %v", err)
+		t.Fatalf("EncodeHookResult() error = %v", err)
 	}
 	if !strings.Contains(string(out), "Allowed by read-only policy") {
-		t.Fatalf("EncodeAllow() = %s, want meaningful reason", out)
+		t.Fatalf("EncodeHookResult() = %s, want meaningful reason", out)
 	}
 }
 
 func TestEncodeAllowIncludesUpdatedInput(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeAllow(
-		&agent.HookEvent{HookEventName: "PreToolUse"},
-		"allowed",
-		map[string]any{"command": `GITHUB_TOKEN="$(cat '/tmp/token')" gh pr view`},
+	out, err := (&Claude{}).EncodeHookResult(
+		hook.Event{HookName: hook.HookPreToolUse},
+		hook.Result{
+			Decision:     hook.DecisionAllow,
+			Reason:       "allowed",
+			UpdatedInput: map[string]any{"command": `GITHUB_TOKEN="$(cat '/tmp/token')" gh pr view`},
+		},
 	)
 	if err != nil {
-		t.Fatalf("EncodeAllow() error = %v", err)
+		t.Fatalf("EncodeHookResult() error = %v", err)
 	}
 	if !strings.Contains(string(out), "updatedInput") {
-		t.Fatalf("EncodeAllow() = %s, want updatedInput", out)
+		t.Fatalf("EncodeHookResult() = %s, want updatedInput", out)
 	}
 	if !strings.Contains(string(out), "suppressOutput") {
-		t.Fatalf("EncodeAllow() = %s, want suppressOutput", out)
+		t.Fatalf("EncodeHookResult() = %s, want suppressOutput", out)
 	}
 }
 
-func TestEncodeClaudeResultMapsAskToDeny(t *testing.T) {
+func TestEncodeClaudeResultMapsAskToAsk(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
-		Decision:  hookruntime.DecisionAsk,
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hook.Result{
+		Decision:  hook.DecisionAsk,
 		Reason:    "approval required",
 		RequestID: "req-123",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out), `"permissionDecision":"deny"`) {
+	if !strings.Contains(string(out), `"permissionDecision":"ask"`) {
 		t.Fatalf("output = %s", string(out))
 	}
 	if !strings.Contains(string(out), `"permissionDecisionReason":"approval required Request ID: req-123"`) {
@@ -207,8 +228,8 @@ func TestEncodeClaudeResultMapsAskToDeny(t *testing.T) {
 func TestEncodeClaudeResultDoesNotDuplicateAskRequestID(t *testing.T) {
 	t.Parallel()
 
-	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hookruntime.Result{
-		Decision:  hookruntime.DecisionAsk,
+	out, err := hookruntime.EncodeClaudeResult("PreToolUse", hook.Result{
+		Decision:  hook.DecisionAsk,
 		Reason:    "approval required. Request ID: req-123",
 		RequestID: "req-123",
 	})
@@ -218,19 +239,40 @@ func TestEncodeClaudeResultDoesNotDuplicateAskRequestID(t *testing.T) {
 	if got := strings.Count(string(out), "Request ID: req-123"); got != 1 {
 		t.Fatalf("output = %s, request id count = %d", string(out), got)
 	}
-	if !strings.Contains(string(out), `"permissionDecision":"deny"`) {
+	if !strings.Contains(string(out), `"permissionDecision":"ask"`) {
 		t.Fatalf("output = %s", string(out))
+	}
+}
+
+func TestEncodeClaudeResultOmitsDecisionForPostToolUse(t *testing.T) {
+	t.Parallel()
+
+	out, err := hookruntime.EncodeClaudeResult("PostToolUse", hook.Result{
+		Decision: hook.DecisionDeny,
+		Reason:   "telemetry only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "permissionDecision") {
+		t.Fatalf("output = %s, want no PreToolUse permission decision", string(out))
+	}
+	if !strings.Contains(string(out), `"suppressOutput":true`) {
+		t.Fatalf("output = %s, want suppressed output", string(out))
 	}
 }
 
 func TestEncodeDenyKeepsReason(t *testing.T) {
 	t.Parallel()
 
-	out, err := (&Claude{}).EncodeDeny(&agent.HookEvent{HookEventName: "PreToolUse"}, "Blocked by policy")
+	out, err := (&Claude{}).EncodeHookResult(
+		hook.Event{HookName: hook.HookPreToolUse},
+		hook.Result{Decision: hook.DecisionDeny, Reason: "Blocked by policy"},
+	)
 	if err != nil {
-		t.Fatalf("EncodeDeny() error = %v", err)
+		t.Fatalf("EncodeHookResult() error = %v", err)
 	}
 	if !strings.Contains(string(out), "Blocked by policy") {
-		t.Fatalf("EncodeDeny() = %s, want deny reason", out)
+		t.Fatalf("EncodeHookResult() = %s, want deny reason", out)
 	}
 }
