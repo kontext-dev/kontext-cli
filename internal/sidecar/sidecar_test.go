@@ -814,7 +814,7 @@ func evaluateServer(t *testing.T, s *Server, req *EvaluateRequest) EvaluateResul
 	if !event.HookName.CanBlock() {
 		return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
 	}
-	result, err := s.runtimeCore().EvaluateHook(context.Background(), event)
+	result, err := s.RuntimeCore().EvaluateHook(context.Background(), event)
 	if err != nil {
 		return EvaluateResultFromResult(s.runtimeFailureResult(event, err))
 	}
@@ -828,7 +828,7 @@ func ingestServer(t *testing.T, s *Server, req *EvaluateRequest) {
 	if err != nil {
 		t.Fatalf("EventFromEvaluateRequest() error = %v", err)
 	}
-	if _, err := s.runtimeCore().IngestEvent(context.Background(), event); err != nil {
+	if _, err := s.RuntimeCore().IngestEvent(context.Background(), event); err != nil {
 		t.Fatalf("IngestEvent() error = %v", err)
 	}
 }

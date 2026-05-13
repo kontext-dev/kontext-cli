@@ -29,6 +29,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
+	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 )
 
@@ -184,7 +185,7 @@ func Start(ctx context.Context, opts Options) error {
 		}
 	}
 
-	// 6. Start sidecar
+	// 6. Start the hosted control plane and shared local runtime.
 	// Use /tmp (not $TMPDIR) with a short ID to keep the Unix socket path
 	// under macOS's 104-byte sun_path limit.
 	sessionDir = filepath.Join("/tmp", "kontext", truncateID(sessionID))
@@ -203,10 +204,27 @@ func Start(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("sidecar: %w", err)
 	}
-	if err := sc.Start(ctx); err != nil {
+	if err := sc.StartControlPlane(ctx); err != nil {
 		return fmt.Errorf("sidecar start: %w", err)
 	}
 	defer sc.Stop()
+
+	runtimeService, err := localruntime.NewService(localruntime.Options{
+		SocketPath:  sc.SocketPath(),
+		Core:        sc.RuntimeCore(),
+		SessionID:   sessionID,
+		AgentName:   opts.Agent,
+		AsyncIngest: true,
+		OnFailure:   sc.RuntimeFailureResult,
+		Diagnostic:  diagnostics,
+	})
+	if err != nil {
+		return fmt.Errorf("local runtime: %w", err)
+	}
+	if err := runtimeService.Start(ctx); err != nil {
+		return fmt.Errorf("local runtime start: %w", err)
+	}
+	defer runtimeService.Stop()
 
 	// 7. Generate hook settings
 	kontextBin, _ := os.Executable()

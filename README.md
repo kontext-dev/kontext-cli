@@ -136,11 +136,12 @@ kontext start --agent claude
   ├─ ConnectRPC: CreateSession → governed session in dashboard
   ├─ BootstrapCli: sync managed provider entries into .env.kontext
   ├─ Token exchange: {{kontext:provider}} → short-lived credential
-  ├─ Sidecar: Unix socket server + heartbeat loop
+  ├─ Local runtime: Unix socket service + RuntimeCore
+  ├─ Hosted control plane: access mode + heartbeat loop
   ├─ Hooks: generated Claude Code settings.json
   │    │
-  │    ├─ PreToolUse        → kontext hook --agent claude → sidecar → ProcessHookEvent
-  │    ├─ PostToolUse       → kontext hook --agent claude → sidecar → ProcessHookEvent
+  │    ├─ PreToolUse        → kontext hook --agent claude → local runtime → ProcessHookEvent
+  │    ├─ PostToolUse       → kontext hook --agent claude → local runtime → ProcessHookEvent
   │
   └─ Exit: EndSession → credential expiry + temp file cleanup
 ```
