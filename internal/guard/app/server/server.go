@@ -22,7 +22,7 @@ const (
 
 type Server struct {
 	store  *sqlite.Store
-	scorer risk.Scorer
+	policy PolicyProvider
 	mux    *http.ServeMux
 }
 
@@ -34,10 +34,17 @@ type ProcessResponse struct {
 }
 
 func NewServer(store *sqlite.Store, scorer risk.Scorer) *Server {
-	if scorer == nil {
-		scorer = risk.NoopScorer{}
+	return NewServerWithPolicy(store, NewRiskPolicyProvider(scorer))
+}
+
+// NewServerWithPolicy creates a Guard server with an injected policy provider.
+// A nil interface uses the default local risk policy; callers must not pass a
+// typed-nil provider because it still satisfies the PolicyProvider interface.
+func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) *Server {
+	if policy == nil {
+		policy = NewRiskPolicyProvider(nil)
 	}
-	server := &Server{store: store, scorer: scorer, mux: http.NewServeMux()}
+	server := &Server{store: store, policy: policy, mux: http.NewServeMux()}
 	server.routes()
 	return server
 }
@@ -71,7 +78,7 @@ func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (ri
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
-	decision, err := risk.DecideRisk(event, s.scorer)
+	decision, err := s.policy.DecideHook(ctx, event)
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
