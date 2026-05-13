@@ -44,7 +44,8 @@ Hosted mode owns login, provider connection, short-lived scoped credentials, hos
 ```text
 Claude Code
   -> kontext hook --agent claude --mode observe
-  -> local daemon
+  -> local runtime Unix socket
+  -> RuntimeCore
   -> deterministic risk rules
   -> Markov-chain risk model
   -> local SQLite

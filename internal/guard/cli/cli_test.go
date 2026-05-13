@@ -27,7 +27,6 @@ func TestHookObserveModeFailsOpenForPreToolUse(t *testing.T) {
 	err := Run(context.Background(), []string{
 		"hook", "claude-code",
 		"--socket", missingTestSocket(t),
-		"--daemon-url", "http://127.0.0.1:1",
 	}, input, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +47,6 @@ func TestHookEnforceModeFailsClosedForPreToolUse(t *testing.T) {
 		"hook", "claude-code",
 		"--mode", "enforce",
 		"--socket", missingTestSocket(t),
-		"--daemon-url", "http://127.0.0.1:1",
 	}, input, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +56,7 @@ func TestHookEnforceModeFailsClosedForPreToolUse(t *testing.T) {
 	}
 }
 
-func TestHookUsesLocalRuntimeSocketBeforeHTTPFallback(t *testing.T) {
+func TestHookUsesLocalRuntimeSocket(t *testing.T) {
 	runtime := &stubGuardRuntime{
 		result: hook.Result{
 			Decision: hook.DecisionDeny,
@@ -74,7 +72,6 @@ func TestHookUsesLocalRuntimeSocketBeforeHTTPFallback(t *testing.T) {
 		"hook", "claude-code",
 		"--mode", "enforce",
 		"--socket", socketPath,
-		"--daemon-url", "http://127.0.0.1:1",
 	}, input, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
@@ -87,33 +84,6 @@ func TestHookUsesLocalRuntimeSocketBeforeHTTPFallback(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&runtime.evaluateCalls); got != 1 {
 		t.Fatalf("EvaluateHook calls = %d, want 1", got)
-	}
-}
-
-func TestGuardHookProcessorLogsSocketFallbackDiagnostic(t *testing.T) {
-	var stderr bytes.Buffer
-	processor := guardHookProcessor{
-		socket: failingHookProcessor{
-			err: errors.New("dial unix /tmp/kontext.sock: connect: no such file or directory"),
-		},
-		fallback: staticHookProcessor{
-			result: hook.Result{Decision: hook.DecisionAllow},
-		},
-		diagnostic: diagnostic.New(&stderr, true),
-	}
-
-	result, err := processor.Process(context.Background(), hook.Event{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Decision != hook.DecisionAllow {
-		t.Fatalf("decision = %s, want %s", result.Decision, hook.DecisionAllow)
-	}
-	if !strings.Contains(stderr.String(), "falling back to HTTP daemon") {
-		t.Fatalf("stderr = %s", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "no such file or directory") {
-		t.Fatalf("stderr = %s", stderr.String())
 	}
 }
 
@@ -184,22 +154,6 @@ func (s *stubGuardRuntime) EvaluateHook(context.Context, hook.Event) (hook.Resul
 
 func (s *stubGuardRuntime) IngestEvent(context.Context, hook.Event) (hook.Result, error) {
 	return hook.Result{Decision: hook.DecisionAllow}, nil
-}
-
-type failingHookProcessor struct {
-	err error
-}
-
-func (p failingHookProcessor) Process(context.Context, hook.Event) (hook.Result, error) {
-	return hook.Result{}, p.err
-}
-
-type staticHookProcessor struct {
-	result hook.Result
-}
-
-func (p staticHookProcessor) Process(context.Context, hook.Event) (hook.Result, error) {
-	return p.result, nil
 }
 
 func TestHookMalformedInputFailsClosedInEnforceMode(t *testing.T) {
