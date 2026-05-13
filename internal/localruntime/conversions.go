@@ -13,6 +13,7 @@ import (
 func EvaluateRequestFromEvent(event hook.Event) (EvaluateRequest, error) {
 	req := EvaluateRequest{
 		Type:           "evaluate",
+		SessionID:      event.SessionID,
 		Agent:          event.Agent,
 		HookEvent:      event.HookName.String(),
 		ToolName:       event.ToolName,
@@ -55,6 +56,9 @@ func EventFromEvaluateRequest(sessionID, fallbackAgent string, req *EvaluateRequ
 	agent := req.Agent
 	if agent == "" {
 		agent = fallbackAgent
+	}
+	if sessionID == "" {
+		sessionID = req.SessionID
 	}
 	event := hook.Event{
 		SessionID:      sessionID,
