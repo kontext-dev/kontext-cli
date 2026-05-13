@@ -9,9 +9,7 @@ import (
 )
 
 type hostedHookRuntime struct {
-	client            sidecarClient
-	sessionID         string
-	agentName         string
+	policy            hostedPolicyProvider
 	diagnostic        diagnostic.Logger
 	currentAccessMode func() backend.HostedAccessMode
 	refreshAccessMode func(backend.HostedAccessMode) error
@@ -72,7 +70,7 @@ func (r hostedHookRuntime) IngestEvent(ctx context.Context, event hook.Event) (h
 }
 
 func (r hostedHookRuntime) processHostedHookEvent(ctx context.Context, event hook.Event) (*backend.ProcessHookEventResult, error) {
-	return r.client.ProcessHookEvent(ctx, buildHookEventRequestFromEvent(withHostedSession(event, r.sessionID, r.agentName)))
+	return r.policy.DecideHook(ctx, event)
 }
 
 func withHostedSession(event hook.Event, sessionID, agentName string) hook.Event {

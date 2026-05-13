@@ -32,25 +32,25 @@ type ProcessResponse struct {
 	EventID    string        `json:"event_id"`
 }
 
-func NewServer(store *sqlite.Store, scorer risk.Scorer) *Server {
+func NewServer(store *sqlite.Store, scorer risk.Scorer) (*Server, error) {
 	return NewServerWithPolicy(store, NewRiskPolicyProvider(scorer))
 }
 
 // NewServerWithPolicy creates a Guard server with an injected policy provider.
 // A nil interface uses the default local risk policy; callers must not pass a
 // typed-nil provider because it still satisfies the PolicyProvider interface.
-func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) *Server {
+func NewServerWithPolicy(store *sqlite.Store, policy PolicyProvider) (*Server, error) {
 	if policy == nil {
 		policy = NewRiskPolicyProvider(nil)
 	}
 	runtime := newGuardHookRuntime(store, policy)
 	core, err := runtimecore.New(runtime)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("create runtime core: %w", err)
 	}
 	server := &Server{store: store, core: core, mux: http.NewServeMux()}
 	server.routes()
-	return server
+	return server, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -219,5 +219,10 @@ func OpenDefaultServer(dbPath string, scorer risk.Scorer) (*Server, func() error
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
-	return NewServer(store, scorer), store.Close, nil
+	server, err := NewServer(store, scorer)
+	if err != nil {
+		_ = store.Close()
+		return nil, nil, err
+	}
+	return server, store.Close, nil
 }

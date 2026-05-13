@@ -125,9 +125,11 @@ func (s *Server) runtimeCore() *runtimecore.Core {
 
 func (s *Server) hostedRuntime() hostedHookRuntime {
 	return hostedHookRuntime{
-		client:            s.client,
-		sessionID:         s.sessionID,
-		agentName:         s.agentName,
+		policy: backendPolicyProvider{
+			client:    s.client,
+			sessionID: s.sessionID,
+			agentName: s.agentName,
+		},
 		diagnostic:        s.diagnostic,
 		currentAccessMode: s.currentAccessMode,
 		refreshAccessMode: s.refreshAccessMode,
