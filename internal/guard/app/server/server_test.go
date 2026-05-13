@@ -102,6 +102,84 @@ func TestProcessHookEventUsesPolicyProvider(t *testing.T) {
 	}
 }
 
+func TestEvaluateHookRejectsTelemetryEvents(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := NewServer(store, risk.NoopScorer{})
+	_, err = server.EvaluateHook(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PostToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "git status"},
+	})
+	if err == nil {
+		t.Fatal("EvaluateHook() error = nil, want telemetry rejection")
+	}
+	summary, err := store.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Actions != 0 {
+		t.Fatalf("summary = %+v, want no persisted action", summary)
+	}
+}
+
+func TestIngestEventRecordsTelemetry(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := NewServer(store, risk.NoopScorer{})
+	decision, err := server.IngestEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PostToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "git status"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != "async_telemetry" || decision.EventID == "" {
+		t.Fatalf("decision = %+v, want telemetry allow decision", decision)
+	}
+	summary, err := store.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Actions != 1 || summary.Warnings != 0 || summary.Critical != 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
+func TestIngestEventRejectsBlockingEvents(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := NewServer(store, risk.NoopScorer{})
+	_, err = server.IngestEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "drop database"},
+	})
+	if err == nil {
+		t.Fatal("IngestEvent() error = nil, want blocking event rejection")
+	}
+	summary, err := store.Summary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Actions != 0 {
+		t.Fatalf("summary = %+v, want no persisted action", summary)
+	}
+}
+
 type failingScorer struct {
 	err error
 }

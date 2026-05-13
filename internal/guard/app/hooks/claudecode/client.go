@@ -30,7 +30,11 @@ func (c Client) Process(ctx context.Context, event hook.Event) (hook.Result, err
 	if err != nil {
 		return hook.Result{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/hooks/process", bytes.NewReader(body))
+	endpoint := "/api/hooks/ingest"
+	if event.HookName.CanBlock() {
+		endpoint = "/api/hooks/evaluate"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return hook.Result{}, err
 	}

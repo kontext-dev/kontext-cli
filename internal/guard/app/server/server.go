@@ -14,6 +14,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 const (
@@ -64,6 +65,8 @@ func (s *Server) ListenAndServe(addr string) error {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
+	s.mux.HandleFunc("POST /api/hooks/evaluate", s.handleEvaluate)
+	s.mux.HandleFunc("POST /api/hooks/ingest", s.handleIngest)
 	s.mux.HandleFunc("POST /api/hooks/process", s.handleProcess)
 	s.mux.HandleFunc("GET /api/summary", s.handleSummary)
 	s.mux.HandleFunc("GET /api/sessions", s.handleSessions)
@@ -71,7 +74,28 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleDashboard)
 }
 
+func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
+	if !hook.HookName(event.HookEventName).CanBlock() {
+		return risk.RiskDecision{}, fmt.Errorf("hook event %q cannot be evaluated for enforcement", event.HookEventName)
+	}
+	return s.decideAndRecord(ctx, event)
+}
+
+func (s *Server) IngestEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
+	if hook.HookName(event.HookEventName).CanBlock() {
+		return risk.RiskDecision{}, fmt.Errorf("hook event %q must be evaluated for enforcement", event.HookEventName)
+	}
+	return s.decideAndRecord(ctx, event)
+}
+
 func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
+	if hook.HookName(event.HookEventName).CanBlock() {
+		return s.EvaluateHook(ctx, event)
+	}
+	return s.IngestEvent(ctx, event)
+}
+
+func (s *Server) decideAndRecord(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
 	if event.HookEventName == "" {
 		return risk.RiskDecision{}, errors.New("hook_event_name is required")
 	}
@@ -95,13 +119,25 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+	s.handleHook(w, r, s.EvaluateHook)
+}
+
+func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+	s.handleHook(w, r, s.IngestEvent)
+}
+
 func (s *Server) handleProcess(w http.ResponseWriter, r *http.Request) {
+	s.handleHook(w, r, s.ProcessHookEvent)
+}
+
+func (s *Server) handleHook(w http.ResponseWriter, r *http.Request, process func(context.Context, risk.HookEvent) (risk.RiskDecision, error)) {
 	var event risk.HookEvent
 	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid hook event")
 		return
 	}
-	decision, err := s.ProcessHookEvent(r.Context(), event)
+	decision, err := process(r.Context(), event)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
