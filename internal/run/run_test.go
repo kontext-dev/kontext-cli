@@ -608,14 +608,14 @@ func TestResolveCredentialsReturnsIdentityMismatchError(t *testing.T) {
 		IssuerURL:   server.URL,
 		AccessToken: "test-access-token",
 	}
+	provider := newHostedCredentialProvider(session, "app_agent-123")
+	provider.connect = fakeFetcher
 
 	_, err := resolveCredentials(
 		context.Background(),
-		session,
+		provider,
 		[]credential.Entry{{EnvVar: "LINEAR_API_KEY", Provider: "linear"}},
-		"app_agent-123",
 		diagnostic.New(io.Discard, false),
-		fakeFetcher,
 	)
 	if err == nil {
 		t.Fatal("resolveCredentials() error = nil, want mismatch")
@@ -639,6 +639,71 @@ func TestEnsureSameIdentityComparesIssuerAndSubject(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "different account") {
 		t.Fatalf("ensureSameIdentity() error = %q, want different account", err)
+	}
+}
+
+func TestResolveCredentialsUsesInjectedProvider(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	provider := recordingCredentialProvider{
+		resolve: func(_ context.Context, entry credential.Entry) (credential.Resolved, error) {
+			calls++
+			if entry.EnvVar != "GITHUB_TOKEN" {
+				t.Fatalf("entry.EnvVar = %q, want GITHUB_TOKEN", entry.EnvVar)
+			}
+			return credential.Resolved{Entry: entry, Value: "resolved-token"}, nil
+		},
+	}
+
+	resolved, err := resolveCredentials(
+		context.Background(),
+		provider,
+		[]credential.Entry{{EnvVar: "GITHUB_TOKEN", Provider: "github"}},
+		diagnostic.New(io.Discard, false),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+	if len(resolved) != 1 || resolved[0].Value != "resolved-token" {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+}
+
+func TestHostedCredentialProviderConnectURLUsesOwnSessionAndClientID(t *testing.T) {
+	t.Parallel()
+
+	session := &auth.Session{IssuerURL: "https://issuer.example"}
+	provider := newHostedCredentialProvider(session, "app_agent-123")
+	var gotSession *auth.Session
+	var gotClientID string
+	provider.connect = func(
+		_ context.Context,
+		session *auth.Session,
+		credentialClientID string,
+		interactive bool,
+		login loginFunc,
+	) (string, error) {
+		gotSession = session
+		gotClientID = credentialClientID
+		if interactive {
+			t.Fatal("interactive = true, want false")
+		}
+		return "https://app.kontext.security/providers/connect#handshake=session-123", nil
+	}
+
+	got, err := provider.ConnectURL(context.Background(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSession != session || gotClientID != "app_agent-123" {
+		t.Fatalf("connect used session=%p clientID=%q, want provider-owned session=%p clientID=app_agent-123", gotSession, gotClientID, session)
+	}
+	if got == "" {
+		t.Fatal("ConnectURL() returned empty URL")
 	}
 }
 
@@ -1153,4 +1218,23 @@ func TestVerifyBlockingHookSettingsRequiresPreToolUseCommand(t *testing.T) {
 	if err := VerifyBlockingHookSettings(brokenPath, "/usr/local/bin/kontext", "claude"); err == nil {
 		t.Fatal("VerifyBlockingHookSettings() error = nil, want missing PreToolUse hook error")
 	}
+}
+
+type recordingCredentialProvider struct {
+	resolve func(context.Context, credential.Entry) (credential.Resolved, error)
+	connect func(context.Context, bool, loginFunc) (string, error)
+}
+
+func (p recordingCredentialProvider) ResolveCredential(ctx context.Context, entry credential.Entry) (credential.Resolved, error) {
+	if p.resolve == nil {
+		return credential.Resolved{}, errors.New("resolve credential should not be called")
+	}
+	return p.resolve(ctx, entry)
+}
+
+func (p recordingCredentialProvider) ConnectURL(ctx context.Context, interactive bool, login loginFunc) (string, error) {
+	if p.connect == nil {
+		return "", errors.New("connect url should not be called")
+	}
+	return p.connect(ctx, interactive, login)
 }
