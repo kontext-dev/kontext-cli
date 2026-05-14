@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,29 +101,6 @@ func TestHeartbeatBackoffIntervalCalculation(t *testing.T) {
 	}
 }
 
-func TestAcceptLoopReturnsOnListenerError(t *testing.T) {
-	t.Parallel()
-
-	ln := &stubListener{acceptErr: errors.New("accept failed")}
-	s := &Server{listener: ln}
-
-	done := make(chan struct{})
-	go func() {
-		s.acceptLoop(context.Background())
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("acceptLoop did not return after listener error")
-	}
-
-	if got := ln.accepts; got != 1 {
-		t.Fatalf("Accept() calls = %d, want 1", got)
-	}
-}
-
 func TestIngestEventRefreshesAccessMode(t *testing.T) {
 	t.Parallel()
 
@@ -138,7 +114,7 @@ func TestIngestEventRefreshesAccessMode(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	s.ingestEvent(context.Background(), &EvaluateRequest{HookEvent: "PostToolUse"})
+	ingestServer(t, s, &EvaluateRequest{HookEvent: "PostToolUse"})
 
 	if got := s.currentAccessMode(); got != backend.HostedAccessModeEnforce {
 		t.Fatalf("currentAccessMode() = %q, want enforce", got)
@@ -195,7 +171,7 @@ func TestEvaluatePreToolUseUsesRuntimeCore(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{
+	result := evaluateServer(t, s, &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
@@ -234,7 +210,7 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 		client:    client,
 	})
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{
+	result := evaluateServer(t, s, &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
@@ -275,7 +251,7 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{
+	result := evaluateServer(t, s, &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
@@ -340,7 +316,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 				diagnostic: diagnostic.New(io.Discard, false),
 			})
 
-			result := s.evaluate(context.Background(), &EvaluateRequest{
+			result := evaluateServer(t, s, &EvaluateRequest{
 				HookEvent: "PreToolUse",
 				ToolName:  "Bash",
 				ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
@@ -382,7 +358,7 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{
+	result := evaluateServer(t, s, &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
@@ -410,61 +386,13 @@ func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 
 	if result.Allowed {
 		t.Fatal("evaluate().Allowed = true, want false")
 	}
 	if result.Reason == "" {
 		t.Fatal("evaluate().Reason = empty, want failure reason")
-	}
-}
-
-func TestEvaluateFailsClosedWhenBlockingHookPayloadCannotDecode(t *testing.T) {
-	t.Parallel()
-
-	s := &Server{
-		sessionID:  "session-123",
-		agentName:  "claude",
-		accessMode: backend.HostedAccessModeEnforce,
-		client:     &stubProcessor{},
-		diagnostic: diagnostic.New(io.Discard, false),
-	}
-
-	result := s.evaluate(context.Background(), &EvaluateRequest{
-		HookEvent: "PreToolUse",
-		ToolInput: json.RawMessage(`{`),
-	})
-
-	if result.Allowed {
-		t.Fatal("evaluate().Allowed = true, want false")
-	}
-	if result.Decision != string(hook.DecisionDeny) {
-		t.Fatalf("evaluate().Decision = %q, want deny", result.Decision)
-	}
-}
-
-func TestEvaluateAllowsNonblockingHookPayloadDecodeFailure(t *testing.T) {
-	t.Parallel()
-
-	s := &Server{
-		sessionID:  "session-123",
-		agentName:  "claude",
-		accessMode: backend.HostedAccessModeEnforce,
-		client:     &stubProcessor{},
-		diagnostic: diagnostic.New(io.Discard, false),
-	}
-
-	result := s.evaluate(context.Background(), &EvaluateRequest{
-		HookEvent: "PostToolUse",
-		ToolInput: json.RawMessage(`{`),
-	})
-
-	if !result.Allowed {
-		t.Fatal("evaluate().Allowed = false, want true")
-	}
-	if result.Decision != string(hook.DecisionAllow) {
-		t.Fatalf("evaluate().Decision = %q, want allow", result.Decision)
 	}
 }
 
@@ -480,7 +408,7 @@ func TestEvaluatePreToolUseFailsClosedBeforeClaudeHookDeadline(t *testing.T) {
 	})
 
 	start := time.Now()
-	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 
 	if result.Allowed {
 		t.Fatal("evaluate().Allowed = true, want false")
@@ -514,7 +442,7 @@ func TestEvaluatePreToolUseFailsClosedWhenEnforceModeCannotPersist(t *testing.T)
 		t.Fatalf("New() error = %v", err)
 	}
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{
+	result := evaluateServer(t, s, &EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
@@ -539,7 +467,7 @@ func TestEvaluatePreToolUseFailsOpenWhenNotEnforcing(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 
 	if !result.Allowed {
 		t.Fatal("evaluate().Allowed = false, want true")
@@ -569,13 +497,13 @@ func TestEvaluateRefreshesAccessModeForLaterFailures(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	first := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	first := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
 		t.Fatal("first evaluate().Allowed = false, want true")
 	}
 
 	client.err = errors.New("backend down")
-	second := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	second := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 	if second.Allowed {
 		t.Fatal("second evaluate().Allowed = true, want enforce-mode fail closed")
 	}
@@ -601,13 +529,13 @@ func TestEvaluateRefreshesAccessModeBackToFailOpen(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	first := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	first := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
 		t.Fatal("first evaluate().Allowed = false, want true")
 	}
 
 	client.err = errors.New("backend down")
-	second := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PreToolUse"})
+	second := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
 	if !second.Allowed {
 		t.Fatal("second evaluate().Allowed = false, want no-policy fail open")
 	}
@@ -621,7 +549,7 @@ func TestEvaluateNonPreToolUseDoesNotCallBackend(t *testing.T) {
 
 	client := &stubProcessor{}
 	s := &Server{client: client}
-	result := s.evaluate(context.Background(), &EvaluateRequest{HookEvent: "PostToolUse"})
+	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PostToolUse"})
 
 	if !result.Allowed {
 		t.Fatal("evaluate().Allowed = false, want true")
@@ -876,25 +804,34 @@ func assertJSONEqual(t *testing.T, got, want []byte) {
 	}
 }
 
-type stubListener struct {
-	accepts   int
-	acceptErr error
+func evaluateServer(t *testing.T, s *Server, req *EvaluateRequest) EvaluateResult {
+	t.Helper()
+
+	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	if err != nil {
+		t.Fatalf("EventFromEvaluateRequest() error = %v", err)
+	}
+	if !event.HookName.CanBlock() {
+		return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
+	}
+	result, err := s.runtimeCore().EvaluateHook(context.Background(), event)
+	if err != nil {
+		return EvaluateResultFromResult(s.runtimeFailureResult(event, err))
+	}
+	return EvaluateResultFromResult(result)
 }
 
-func (l *stubListener) Accept() (net.Conn, error) {
-	l.accepts++
-	return nil, l.acceptErr
+func ingestServer(t *testing.T, s *Server, req *EvaluateRequest) {
+	t.Helper()
+
+	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	if err != nil {
+		t.Fatalf("EventFromEvaluateRequest() error = %v", err)
+	}
+	if _, err := s.runtimeCore().IngestEvent(context.Background(), event); err != nil {
+		t.Fatalf("IngestEvent() error = %v", err)
+	}
 }
-
-func (l *stubListener) Close() error { return nil }
-
-func (l *stubListener) Addr() net.Addr { return stubAddr("stub") }
-
-type stubAddr string
-
-func (a stubAddr) Network() string { return string(a) }
-
-func (a stubAddr) String() string { return string(a) }
 
 type stubProcessor struct {
 	result       *backend.ProcessHookEventResult

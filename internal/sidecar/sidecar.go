@@ -3,7 +3,6 @@ package sidecar
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
@@ -85,13 +85,13 @@ func (h *heartbeatState) record(now time.Time, err error, logf func(string, ...a
 type Server struct {
 	socketPath string
 	modePath   string
-	listener   net.Listener
 	sessionID  string
 	agentName  string
 	mu         sync.RWMutex
 	accessMode backend.HostedAccessMode
 	client     sidecarClient
 	core       *runtimecore.Core
+	local      *localruntime.Service
 	diagnostic diagnostic.Logger
 	cancel     context.CancelFunc
 }
@@ -156,19 +156,28 @@ func (s *Server) refreshAccessMode(mode backend.HostedAccessMode) error {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	os.Remove(s.socketPath)
 	if err := os.WriteFile(s.modePath, []byte(s.currentAccessMode()), 0o600); err != nil {
 		return err
 	}
 
-	ln, err := net.Listen("unix", s.socketPath)
+	local, err := localruntime.NewService(localruntime.Options{
+		SocketPath:  s.socketPath,
+		Core:        s.runtimeCore(),
+		SessionID:   s.sessionID,
+		AgentName:   s.agentName,
+		AsyncIngest: true,
+		OnFailure:   s.runtimeFailureResult,
+		Diagnostic:  s.diagnostic,
+	})
 	if err != nil {
 		return err
 	}
-	s.listener = ln
+	if err := local.Start(ctx); err != nil {
+		return err
+	}
+	s.local = local
 
 	ctx, s.cancel = context.WithCancel(ctx)
-	go s.acceptLoop(ctx)
 	go s.heartbeatLoop(ctx)
 
 	return nil
@@ -178,64 +187,8 @@ func (s *Server) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.listener != nil {
-		s.listener.Close()
-	}
-	os.Remove(s.socketPath)
-}
-
-func (s *Server) acceptLoop(ctx context.Context) {
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if ne, ok := err.(net.Error); ok && ne.Temporary() {
-					s.diagnostic.Printf("sidecar accept temporary error: %v\n", err)
-					continue
-				}
-				s.diagnostic.Printf("sidecar accept: %v\n", err)
-				return
-			}
-		}
-		go s.handleConn(ctx, conn)
-	}
-}
-
-func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		s.diagnostic.Printf("sidecar deadline: %v\n", err)
-		return
-	}
-
-	var req EvaluateRequest
-	if err := ReadMessage(conn, &req); err != nil {
-		s.diagnostic.Printf("sidecar read: %v\n", err)
-		return
-	}
-
-	result := s.evaluate(ctx, &req)
-	if err := WriteMessage(conn, result); err != nil {
-		s.diagnostic.Printf("sidecar write: %v\n", err)
-		return
-	}
-
-	if req.HookEvent != "PreToolUse" {
-		go s.ingestEvent(ctx, &req)
-	}
-}
-
-func (s *Server) ingestEvent(ctx context.Context, req *EvaluateRequest) {
-	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
-	if err != nil {
-		s.diagnostic.Printf("sidecar ingest decode: %v\n", err)
-		return
-	}
-	if _, err := s.runtimeCore().IngestEvent(ctx, event); err != nil {
-		s.diagnostic.Printf("sidecar ingest: %v\n", err)
+	if s.local != nil {
+		s.local.Stop()
 	}
 }
 
@@ -261,47 +214,24 @@ func (s *Server) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-func (s *Server) evaluate(ctx context.Context, req *EvaluateRequest) EvaluateResult {
-	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
-	if err != nil {
-		s.diagnostic.Printf("sidecar evaluate decode: %v\n", err)
-		return EvaluateResultFromResult(sidecarDecodeFailureResult(req))
-	}
+func (s *Server) runtimeFailureResult(event hook.Event, _ error) hook.Result {
 	if !event.HookName.CanBlock() {
-		return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
-	}
-	result, err := s.runtimeCore().EvaluateHook(ctx, event)
-	if err != nil {
-		s.diagnostic.Printf("sidecar enforce: %v\n", err)
-		accessMode := s.currentAccessMode()
-		if accessMode != backend.HostedAccessModeEnforce {
-			return EvaluateResultFromResult(hook.Result{
-				Decision: hook.DecisionAllow,
-				Reason:   "Kontext hosted access is not enforcing.",
-				Mode:     string(accessMode),
-			})
+		return hook.Result{
+			Decision: hook.DecisionAllow,
+			Reason:   "Kontext hook event could not be ingested.",
 		}
-		return EvaluateResultFromResult(hook.Result{
-			Decision: hook.DecisionDeny,
-			Reason:   "Kontext access policy could not be evaluated.",
-		})
 	}
-	return EvaluateResultFromResult(result)
-}
-
-func sidecarDecodeFailureResult(req *EvaluateRequest) hook.Result {
-	if req != nil {
-		hookName, ok := normalizeHookName(req.HookEvent)
-		if ok && !hookName.CanBlock() {
-			return hook.Result{
-				Decision: hook.DecisionAllow,
-				Reason:   "Kontext hook event could not be decoded.",
-			}
+	accessMode := s.currentAccessMode()
+	if accessMode != backend.HostedAccessModeEnforce {
+		return hook.Result{
+			Decision: hook.DecisionAllow,
+			Reason:   "Kontext hosted access is not enforcing.",
+			Mode:     string(accessMode),
 		}
 	}
 	return hook.Result{
 		Decision: hook.DecisionDeny,
-		Reason:   "Kontext hook event could not be decoded.",
+		Reason:   "Kontext access policy could not be evaluated.",
 	}
 }
 
