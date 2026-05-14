@@ -238,6 +238,26 @@ func TestEvaluateHookWithSidecarFailsClosedWhenEnforceSocketMissing(t *testing.T
 	}
 }
 
+func TestEvaluateHookWithSidecarModeFailsClosedWhenEnforceSocketMissing(t *testing.T) {
+	result, err := evaluateHookWithSidecarForMode("", hook.Event{
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
+	}, "enforce")
+	if err != nil {
+		t.Fatalf("evaluateHookWithSidecarForMode() error = %v", err)
+	}
+	if result.Decision != hook.DecisionDeny {
+		t.Fatalf("decision = %q, want DENY", result.Decision)
+	}
+	if result.Mode != "enforce" {
+		t.Fatalf("mode = %q, want enforce", result.Mode)
+	}
+	if result.Reason != "sidecar socket missing" {
+		t.Fatalf("reason = %q, want missing socket", result.Reason)
+	}
+}
+
 func TestEvaluateHookWithSidecarAllowsPostToolUseWhenSocketMissing(t *testing.T) {
 	t.Setenv("KONTEXT_ACCESS_MODE", "enforce")
 

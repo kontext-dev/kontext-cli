@@ -217,12 +217,53 @@ func TestHookMalformedInputFailsClosedInEnforceMode(t *testing.T) {
 func TestInstalledHookCommandUsesStableLauncherOverride(t *testing.T) {
 	t.Setenv("KONTEXT_GUARD_HOOK_COMMAND", "'/usr/local/bin/kontext' guard hook claude-code")
 
-	got := installedHookCommand()
+	got := installedHookCommand("/tmp/kontext-custom.sock")
 	if strings.Contains(got, "go-build") {
 		t.Fatalf("hook command should not use transient Go build cache path: %s", got)
 	}
 	if !strings.Contains(got, "guard hook claude-code") {
 		t.Fatalf("hook command did not use launcher override: %s", got)
+	}
+}
+
+func TestInstalledHookCommandUsesCanonicalRootHookHandler(t *testing.T) {
+	t.Setenv("KONTEXT_GUARD_HOOK_COMMAND", "")
+
+	got := installedHookCommand("/tmp/kontext-custom.sock")
+	if strings.Contains(got, "guard hook claude-code") {
+		t.Fatalf("hook command used legacy Guard handler: %s", got)
+	}
+	if !strings.Contains(got, "hook --agent claude") {
+		t.Fatalf("hook command did not use canonical root handler: %s", got)
+	}
+	if !strings.Contains(got, `--mode "${KONTEXT_MODE:-observe}"`) {
+		t.Fatalf("hook command did not leave mode overridable through KONTEXT_MODE: %s", got)
+	}
+	if strings.Contains(got, "--mode observe") {
+		t.Fatalf("hook command hardcoded observe mode: %s", got)
+	}
+	if !strings.Contains(got, "--socket ") || !strings.Contains(got, "/tmp/kontext-custom.sock") {
+		t.Fatalf("hook command did not carry custom socket path: %s", got)
+	}
+}
+
+func TestIsGuardHookCommandRecognizesLegacyAndCanonicalGuardHooks(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{
+		"/usr/local/bin/kontext guard hook claude-code",
+		"'/usr/local/bin/kontext' guard hook claude-code",
+		"/usr/local/bin/kontext hook --agent claude --mode observe",
+		"'/usr/local/bin/kontext' hook --agent claude --mode observe",
+		"cd '/repo' && go run ./cmd/kontext hook --agent claude --mode observe",
+		`/usr/local/bin/kontext hook --agent claude --mode "${KONTEXT_MODE:-observe}" --socket /tmp/kontext-custom.sock`,
+	} {
+		if !isGuardHookCommand(command) {
+			t.Fatalf("isGuardHookCommand(%q) = false, want true", command)
+		}
+	}
+	if isGuardHookCommand("/usr/local/bin/kontext hook --agent claude") {
+		t.Fatal("hosted/pass-through hook should not be classified as Guard observe hook")
 	}
 }
 
