@@ -120,6 +120,80 @@ func TestProcessHookEventUsesPolicyProvider(t *testing.T) {
 	}
 }
 
+func TestProcessHookEventEnsuresDaemonObservedSession(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := newTestServer(t, store, risk.NoopScorer{})
+
+	if _, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		HookEventName: "PreToolUse",
+		Agent:         "claude",
+		ToolName:      "Read",
+		ToolInput:     map[string]any{"file_path": "README.md"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := store.Session(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Source != "daemon_observed" || session.Status != "open" || session.Agent != "claude" {
+		t.Fatalf("session = %+v, want daemon-observed local session", session)
+	}
+	events, err := store.Events(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].SessionID != "local" {
+		t.Fatalf("events = %+v, want one local event", events)
+	}
+}
+
+func TestProcessHookEventPreservesClosedWrapperOwnedSession(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := newTestServer(t, store, risk.NoopScorer{})
+
+	if _, err := store.OpenSession(context.Background(), "session-123", "claude", "/tmp/project", "wrapper_owned", "backend-123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CloseSession(context.Background(), "session-123"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "session-123",
+		HookEventName: "PreToolUse",
+		Agent:         "claude",
+		ToolName:      "Read",
+		ToolInput:     map[string]any{"file_path": "README.md"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := store.Session(context.Background(), "session-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Source != "wrapper_owned" || session.Status != "closed" || session.ClosedAt == nil {
+		t.Fatalf("session = %+v, want closed wrapper-owned session", session)
+	}
+	events, err := store.Events(context.Background(), "session-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want one event", events)
+	}
+}
+
 func TestProcessHookEventPreservesRiskMetadata(t *testing.T) {
 	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {

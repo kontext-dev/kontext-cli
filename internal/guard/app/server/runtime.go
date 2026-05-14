@@ -8,6 +8,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 type guardHookRuntime struct {
@@ -17,6 +18,40 @@ type guardHookRuntime struct {
 
 func newGuardHookRuntime(store *sqlite.Store, policy PolicyProvider) guardHookRuntime {
 	return guardHookRuntime{store: store, policy: policy}
+}
+
+func (r guardHookRuntime) OpenSession(ctx context.Context, session runtimecore.Session) (runtimecore.Session, error) {
+	source := string(session.Source)
+	if source == "" {
+		source = string(runtimecore.SessionSourceDaemonObserved)
+	}
+	record, err := r.store.OpenSession(ctx, session.ID, session.Agent, session.CWD, source, session.ExternalID)
+	if err != nil {
+		return runtimecore.Session{}, err
+	}
+	return runtimecore.Session{
+		ID:         record.ID,
+		Agent:      record.Agent,
+		CWD:        record.CWD,
+		Source:     runtimecore.SessionSource(record.Source),
+		ExternalID: record.ExternalID,
+	}, nil
+}
+
+func (r guardHookRuntime) CloseSession(ctx context.Context, sessionID string) error {
+	return r.store.CloseSession(ctx, sessionID)
+}
+
+func (r guardHookRuntime) EnsureSessionForEvent(ctx context.Context, event hook.Event) (hook.Event, error) {
+	session, err := r.store.EnsureObservedSession(ctx, event.SessionID, event.Agent, event.CWD)
+	if err != nil {
+		return hook.Event{}, err
+	}
+	event.SessionID = session.ID
+	if event.Agent == "" {
+		event.Agent = session.Agent
+	}
+	return event, nil
 }
 
 func (r guardHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
