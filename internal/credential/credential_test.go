@@ -1,6 +1,8 @@
 package credential
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,5 +54,36 @@ STRIPE_KEY={{kontext:stripe}}
 	}
 	if got, want := entries[1].Target(), "postgres/prod-readonly"; got != want {
 		t.Fatalf("entries[1].Target() = %q, want %q", got, want)
+	}
+}
+
+func TestProviderFuncResolvesCredential(t *testing.T) {
+	t.Parallel()
+
+	provider := ProviderFunc(func(_ context.Context, entry Entry) (Resolved, error) {
+		return Resolved{Entry: entry, Value: "token"}, nil
+	})
+
+	resolved, err := provider.ResolveCredential(context.Background(), Entry{
+		EnvVar:   "GITHUB_TOKEN",
+		Provider: "github",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.EnvVar != "GITHUB_TOKEN" || resolved.Value != "token" {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+}
+
+func TestNoopProviderReportsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	_, err := NoopProvider{}.ResolveCredential(context.Background(), Entry{
+		EnvVar:   "GITHUB_TOKEN",
+		Provider: "github",
+	})
+	if !errors.Is(err, ErrNoopProvider) {
+		t.Fatalf("err = %v, want ErrNoopProvider", err)
 	}
 }

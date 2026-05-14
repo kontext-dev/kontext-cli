@@ -180,7 +180,13 @@ func Start(ctx context.Context, opts Options) error {
 
 	var resolved []credential.Resolved
 	if len(templateDoc.Entries) > 0 {
-		resolved, err = resolveCredentials(ctx, session, templateDoc.Entries, credentialClientID, diagnostics, fetchConnectURLForConnectFlow)
+		provider := newHostedCredentialProvider(session, credentialClientID)
+		resolved, err = resolveCredentials(
+			ctx,
+			provider,
+			templateDoc.Entries,
+			diagnostics,
+		)
 		if err != nil {
 			return err
 		}
@@ -311,17 +317,21 @@ func ensureSession(ctx context.Context, issuerURL, clientID string) (*auth.Sessi
 	return result.Session, nil
 }
 
-type connectURLFetcher func(ctx context.Context, session *auth.Session, credentialClientID string, interactive bool, login loginFunc) (string, error)
+type connectableCredentialProvider interface {
+	credential.Provider
+	ConnectURL(context.Context, bool, loginFunc) (string, error)
+}
 
 // resolveCredentials exchanges each template entry for a live credential.
 func resolveCredentials(
 	ctx context.Context,
-	session *auth.Session,
+	provider connectableCredentialProvider,
 	entries []credential.Entry,
-	credentialClientID string,
 	diagnostics diagnostic.Logger,
-	fetchConnect connectURLFetcher,
 ) ([]credential.Resolved, error) {
+	if provider == nil {
+		return nil, errors.New("credential provider is required")
+	}
 	fmt.Fprintln(os.Stderr, "\nResolving credentials...")
 	resolved := make([]credential.Resolved, 0, len(entries))
 	failures := make(map[string]error)
@@ -330,14 +340,14 @@ func resolveCredentials(
 	for _, entry := range entries {
 		entryByEnvVar[entry.EnvVar] = entry
 		fmt.Fprintf(os.Stderr, "  %s (%s)... ", entry.EnvVar, entry.Target())
-		value, err := exchangeCredential(ctx, session, entry, credentialClientID)
+		resolvedCredential, err := provider.ResolveCredential(ctx, entry)
 		if err != nil {
 			printCredentialFailure(entry, err, diagnostics)
 			failures[entry.EnvVar] = err
 			continue
 		}
 		fmt.Fprintln(os.Stderr, "✓")
-		resolved = append(resolved, credential.Resolved{Entry: entry, Value: value})
+		resolved = append(resolved, resolvedCredential)
 	}
 
 	connectable := unresolvedConnectableEntries(entryByEnvVar, failures)
@@ -347,10 +357,8 @@ func resolveCredentials(
 	}
 
 	interactive := isInteractiveTerminal()
-	connectURL, connectErr := fetchConnect(
+	connectURL, connectErr := provider.ConnectURL(
 		ctx,
-		session,
-		credentialClientID,
 		interactive,
 		auth.Login,
 	)
@@ -379,9 +387,8 @@ func resolveCredentials(
 
 	retriedResolved, remainingFailures := retryConnectableCredentials(
 		ctx,
-		session,
+		provider,
 		connectable,
-		credentialClientID,
 		diagnostics,
 	)
 	resolved = append(resolved, retriedResolved...)
@@ -441,9 +448,8 @@ func unresolvedConnectableEntries(entryByEnvVar map[string]credential.Entry, fai
 
 func retryConnectableCredentials(
 	ctx context.Context,
-	session *auth.Session,
+	provider credential.Provider,
 	entries []credential.Entry,
-	credentialClientID string,
 	diagnostics diagnostic.Logger,
 ) ([]credential.Resolved, map[string]error) {
 	attemptDelays := []time.Duration{0, 3 * time.Second, 7 * time.Second}
@@ -469,14 +475,14 @@ func retryConnectableCredentials(
 				attempt+1,
 				len(attemptDelays),
 			)
-			value, err := exchangeCredential(ctx, session, entry, credentialClientID)
+			resolvedCredential, err := provider.ResolveCredential(ctx, entry)
 			if err != nil {
 				diagnostics.Printf("credential %s retry failed: %v\n", entry.EnvVar, err)
 				failures[envVar] = err
 				continue
 			}
 			diagnostics.Printf("resolved\n")
-			resolved = append(resolved, credential.Resolved{Entry: entry, Value: value})
+			resolved = append(resolved, resolvedCredential)
 			delete(failures, envVar)
 			delete(pending, envVar)
 		}
@@ -762,6 +768,34 @@ type credentialResolutionError struct {
 
 func (e *credentialResolutionError) Error() string {
 	return e.Message
+}
+
+type hostedCredentialProvider struct {
+	session  *auth.Session
+	clientID string
+	exchange func(context.Context, *auth.Session, credential.Entry, string) (string, error)
+	connect  func(context.Context, *auth.Session, string, bool, loginFunc) (string, error)
+}
+
+func newHostedCredentialProvider(session *auth.Session, clientID string) hostedCredentialProvider {
+	return hostedCredentialProvider{
+		session:  session,
+		clientID: clientID,
+		exchange: exchangeCredential,
+		connect:  fetchConnectURLForConnectFlow,
+	}
+}
+
+func (p hostedCredentialProvider) ResolveCredential(ctx context.Context, entry credential.Entry) (credential.Resolved, error) {
+	value, err := p.exchange(ctx, p.session, entry, p.clientID)
+	if err != nil {
+		return credential.Resolved{}, err
+	}
+	return credential.Resolved{Entry: entry, Value: value}, nil
+}
+
+func (p hostedCredentialProvider) ConnectURL(ctx context.Context, interactive bool, login loginFunc) (string, error) {
+	return p.connect(ctx, p.session, p.clientID, interactive, login)
 }
 
 func exchangeToken(ctx context.Context, session *auth.Session, clientID, resource string, scopes ...string) (*tokenExchangeResponse, error) {
