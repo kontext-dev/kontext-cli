@@ -52,7 +52,7 @@ assert_hook() {
   local expected_phrase="$4"
   local output
 
-  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --socket "$SOCKET_PATH")"
+  output="$(printf '%s' "$payload" | go run ./cmd/kontext hook --agent claude --mode observe --socket "$SOCKET_PATH")"
   EXPECTED_REASON="$expected_reason" EXPECTED_PHRASE="$expected_phrase" node -e '
 const expectedReason = process.env.EXPECTED_REASON;
 const expectedPhrase = process.env.EXPECTED_PHRASE;
@@ -81,7 +81,7 @@ assert_telemetry_hook() {
   local payload="$2"
   local output
 
-  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --socket "$SOCKET_PATH")"
+  output="$(printf '%s' "$payload" | go run ./cmd/kontext hook --agent claude --mode observe --socket "$SOCKET_PATH")"
   node -e '
 let raw = "";
 process.stdin.on("data", (chunk) => raw += chunk);
