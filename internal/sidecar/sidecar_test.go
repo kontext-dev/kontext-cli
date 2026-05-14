@@ -19,6 +19,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/hookruntime"
+	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
@@ -114,7 +115,7 @@ func TestIngestEventRefreshesAccessMode(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	ingestServer(t, s, &EvaluateRequest{HookEvent: "PostToolUse"})
+	ingestServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PostToolUse"})
 
 	if got := s.currentAccessMode(); got != backend.HostedAccessModeEnforce {
 		t.Fatalf("currentAccessMode() = %q, want enforce", got)
@@ -171,7 +172,7 @@ func TestEvaluatePreToolUseUsesRuntimeCore(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	result := evaluateServer(t, s, &EvaluateRequest{
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
@@ -210,7 +211,7 @@ func TestEvaluatePreToolUseUsesBackendDecision(t *testing.T) {
 		client:    client,
 	})
 
-	result := evaluateServer(t, s, &EvaluateRequest{
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
@@ -251,7 +252,7 @@ func TestEvaluatePreToolUseAskKeepsRawReasonAndRequestMetadata(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := evaluateServer(t, s, &EvaluateRequest{
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
@@ -316,7 +317,7 @@ func TestEvaluatePreToolUseAllowsBackendBlocksWhenNotEnforcing(t *testing.T) {
 				diagnostic: diagnostic.New(io.Discard, false),
 			})
 
-			result := evaluateServer(t, s, &EvaluateRequest{
+			result := evaluateServer(t, s, &localruntime.EvaluateRequest{
 				HookEvent: "PreToolUse",
 				ToolName:  "Bash",
 				ToolInput: json.RawMessage(`{"command":"gh pr merge 92"}`),
@@ -358,7 +359,7 @@ func TestEvaluatePreToolUseUsesCachedModeWhenBackendOmitsMode(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := evaluateServer(t, s, &EvaluateRequest{
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh repo delete"}`),
@@ -386,7 +387,7 @@ func TestEvaluatePreToolUseFailsClosedOnBackendError(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 
 	if result.Allowed {
 		t.Fatal("evaluate().Allowed = true, want false")
@@ -408,7 +409,7 @@ func TestEvaluatePreToolUseFailsClosedBeforeClaudeHookDeadline(t *testing.T) {
 	})
 
 	start := time.Now()
-	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 
 	if result.Allowed {
 		t.Fatal("evaluate().Allowed = true, want false")
@@ -442,7 +443,7 @@ func TestEvaluatePreToolUseFailsClosedWhenEnforceModeCannotPersist(t *testing.T)
 		t.Fatalf("New() error = %v", err)
 	}
 
-	result := evaluateServer(t, s, &EvaluateRequest{
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{
 		HookEvent: "PreToolUse",
 		ToolName:  "Bash",
 		ToolInput: json.RawMessage(`{"command":"gh pr view 92"}`),
@@ -467,7 +468,7 @@ func TestEvaluatePreToolUseFailsOpenWhenNotEnforcing(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 
 	if !result.Allowed {
 		t.Fatal("evaluate().Allowed = false, want true")
@@ -497,13 +498,13 @@ func TestEvaluateRefreshesAccessModeForLaterFailures(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	first := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	first := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
 		t.Fatal("first evaluate().Allowed = false, want true")
 	}
 
 	client.err = errors.New("backend down")
-	second := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	second := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 	if second.Allowed {
 		t.Fatal("second evaluate().Allowed = true, want enforce-mode fail closed")
 	}
@@ -529,13 +530,13 @@ func TestEvaluateRefreshesAccessModeBackToFailOpen(t *testing.T) {
 		diagnostic: diagnostic.New(io.Discard, false),
 	})
 
-	first := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	first := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 	if !first.Allowed {
 		t.Fatal("first evaluate().Allowed = false, want true")
 	}
 
 	client.err = errors.New("backend down")
-	second := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PreToolUse"})
+	second := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PreToolUse"})
 	if !second.Allowed {
 		t.Fatal("second evaluate().Allowed = false, want no-policy fail open")
 	}
@@ -549,7 +550,7 @@ func TestEvaluateNonPreToolUseDoesNotCallBackend(t *testing.T) {
 
 	client := &stubProcessor{}
 	s := &Server{client: client}
-	result := evaluateServer(t, s, &EvaluateRequest{HookEvent: "PostToolUse"})
+	result := evaluateServer(t, s, &localruntime.EvaluateRequest{HookEvent: "PostToolUse"})
 
 	if !result.Allowed {
 		t.Fatal("evaluate().Allowed = false, want true")
@@ -804,29 +805,29 @@ func assertJSONEqual(t *testing.T, got, want []byte) {
 	}
 }
 
-func evaluateServer(t *testing.T, s *Server, req *EvaluateRequest) EvaluateResult {
+func evaluateServer(t *testing.T, s *Server, req *localruntime.EvaluateRequest) localruntime.EvaluateResult {
 	t.Helper()
 
-	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	event, err := localruntime.EventFromEvaluateRequest(s.sessionID, s.agentName, req)
 	if err != nil {
-		t.Fatalf("EventFromEvaluateRequest() error = %v", err)
+		t.Fatalf("localruntime.EventFromEvaluateRequest() error = %v", err)
 	}
 	if !event.HookName.CanBlock() {
-		return EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
+		return localruntime.EvaluateResultFromResult(hook.Result{Decision: hook.DecisionAllow})
 	}
 	result, err := s.RuntimeCore().EvaluateHook(context.Background(), event)
 	if err != nil {
-		return EvaluateResultFromResult(s.runtimeFailureResult(event, err))
+		return localruntime.EvaluateResultFromResult(s.runtimeFailureResult(event, err))
 	}
-	return EvaluateResultFromResult(result)
+	return localruntime.EvaluateResultFromResult(result)
 }
 
-func ingestServer(t *testing.T, s *Server, req *EvaluateRequest) {
+func ingestServer(t *testing.T, s *Server, req *localruntime.EvaluateRequest) {
 	t.Helper()
 
-	event, err := EventFromEvaluateRequest(s.sessionID, s.agentName, req)
+	event, err := localruntime.EventFromEvaluateRequest(s.sessionID, s.agentName, req)
 	if err != nil {
-		t.Fatalf("EventFromEvaluateRequest() error = %v", err)
+		t.Fatalf("localruntime.EventFromEvaluateRequest() error = %v", err)
 	}
 	if _, err := s.RuntimeCore().IngestEvent(context.Background(), event); err != nil {
 		t.Fatalf("IngestEvent() error = %v", err)

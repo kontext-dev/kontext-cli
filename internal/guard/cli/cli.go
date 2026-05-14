@@ -16,10 +16,8 @@ import (
 
 	"github.com/cli/browser"
 
-	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
-	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
 	"github.com/kontext-security/kontext-cli/internal/guard/modelsnapshot"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
@@ -54,8 +52,6 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runDoctor(ctx, args[1:], stdout)
 	case "hooks":
 		return runHooks(args[1:], stdout)
-	case "hook":
-		return runHookCommand(ctx, args[1:], stdin, stdout, stderr)
 	case "traces":
 		return runTraces(ctx, args[1:], stdout)
 	case "model":
@@ -81,7 +77,6 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  doctor                        Check local daemon health")
 	fmt.Fprintln(out, "  hooks install claude-code     Install Claude Code hooks")
 	fmt.Fprintln(out, "  hooks uninstall claude-code   Remove Claude Code hooks")
-	fmt.Fprintln(out, "  hook claude-code              Runtime hook adapter compatibility alias")
 	fmt.Fprintln(out, "  traces inspect                Inspect local trace summary")
 	fmt.Fprintln(out, "  model info                    Print baseline model info")
 	fmt.Fprintln(out, "  model train                   Train a local fixture model")
@@ -171,34 +166,6 @@ func verifyClaudeCode() error {
 		return fmt.Errorf("Claude Code was not found on PATH; install Claude Code or run with --skip-hook-install")
 	}
 	return nil
-}
-
-func runHookCommand(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: kontext guard hook <agent>")
-	}
-	a, ok := agent.Get(args[0])
-	if !ok {
-		return fmt.Errorf("unsupported guard hook agent %q", args[0])
-	}
-	return runHook(ctx, args[0], a, args[1:], stdin, stdout, stderr)
-}
-
-func runHook(ctx context.Context, agentName string, a agent.Agent, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("hook "+a.Name(), flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
-	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookruntime.ModeObserve)), "hook mode: observe or enforce")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	hookMode, err := hookruntime.ParseMode(*mode)
-	if err != nil {
-		return err
-	}
-	adapter := hookruntime.AgentAdapter{Agent: a, AgentName: agentName}
-	processor := localruntime.NewClient(*socketPath)
-	return hookruntime.Run(ctx, adapter, processor, hookMode, stdin, stdout, stderr)
 }
 
 func runStatus(ctx context.Context, args []string, out io.Writer) error {
