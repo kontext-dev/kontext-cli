@@ -30,6 +30,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/credential"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/localruntime"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 	"github.com/kontext-security/kontext-cli/internal/sidecar"
 )
 
@@ -208,6 +209,18 @@ func Start(ctx context.Context, opts Options) error {
 		return fmt.Errorf("sidecar start: %w", err)
 	}
 	defer sc.Stop()
+	if _, err := sc.RuntimeCore().OpenSession(ctx, runtimecore.Session{
+		ID:         sessionID,
+		Agent:      opts.Agent,
+		CWD:        cwd,
+		Source:     runtimecore.SessionSourceWrapperOwned,
+		ExternalID: sessionID,
+	}); err != nil {
+		return fmt.Errorf("open runtime session: %w", err)
+	}
+	defer func() {
+		_ = sc.RuntimeCore().CloseSession(context.Background(), sessionID)
+	}()
 
 	runtimeService, err := localruntime.NewService(localruntime.Options{
 		SocketPath:  sc.SocketPath(),

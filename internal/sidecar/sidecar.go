@@ -127,6 +127,8 @@ func (s *Server) RuntimeFailureResult(event hook.Event, err error) hook.Result {
 
 func (s *Server) hostedRuntime() hostedHookRuntime {
 	return hostedHookRuntime{
+		sessionID: s.sessionID,
+		agentName: s.agentName,
 		policy: backendPolicyProvider{
 			client:    s.client,
 			sessionID: s.sessionID,

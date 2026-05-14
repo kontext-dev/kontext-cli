@@ -6,13 +6,43 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
 type hostedHookRuntime struct {
+	sessionID         string
+	agentName         string
 	policy            hostedPolicyProvider
 	diagnostic        diagnostic.Logger
 	currentAccessMode func() backend.HostedAccessMode
 	refreshAccessMode func(backend.HostedAccessMode) error
+}
+
+func (r hostedHookRuntime) OpenSession(_ context.Context, session runtimecore.Session) (runtimecore.Session, error) {
+	// Hosted session lifecycle is currently represented by the sidecar session ID.
+	// Backend persistence will be wired in by the hosted session API.
+	if session.ID == "" {
+		session.ID = r.sessionID
+	}
+	if session.Agent == "" {
+		session.Agent = r.agentName
+	}
+	if session.Source == "" {
+		session.Source = runtimecore.SessionSourceWrapperOwned
+	}
+	if session.ExternalID == "" {
+		session.ExternalID = session.ID
+	}
+	return session, nil
+}
+
+func (r hostedHookRuntime) CloseSession(context.Context, string) error {
+	// Hosted session close is a placeholder until the backend exposes lifecycle persistence.
+	return nil
+}
+
+func (r hostedHookRuntime) EnsureSessionForEvent(_ context.Context, event hook.Event) (hook.Event, error) {
+	return withHostedSession(event, r.sessionID, r.agentName), nil
 }
 
 func (r hostedHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {

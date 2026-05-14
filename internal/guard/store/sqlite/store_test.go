@@ -96,6 +96,107 @@ func TestSaveDecisionGeneratesUniqueIDsConcurrently(t *testing.T) {
 	}
 }
 
+func TestOpenAndCloseSessionRecordsLifecycle(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	opened, err := store.OpenSession(context.Background(), "session-123", "claude", "/tmp/project", "wrapper_owned", "backend-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.ID != "session-123" ||
+		opened.Agent != "claude" ||
+		opened.CWD != "/tmp/project" ||
+		opened.Source != "wrapper_owned" ||
+		opened.Status != "open" ||
+		opened.ExternalID != "backend-123" ||
+		opened.ClosedAt != nil {
+		t.Fatalf("opened session = %+v", opened)
+	}
+
+	if err := store.CloseSession(context.Background(), "session-123"); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := store.Session(context.Background(), "session-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != "closed" || closed.ClosedAt == nil {
+		t.Fatalf("closed session = %+v, want closed with closed_at", closed)
+	}
+}
+
+func TestCloseSessionNormalizesEmptySessionID(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.OpenSession(context.Background(), "", "claude", "/tmp/project", "daemon_observed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CloseSession(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := store.Session(context.Background(), "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Status != "closed" || closed.ClosedAt == nil {
+		t.Fatalf("closed session = %+v, want normalized local session closed", closed)
+	}
+}
+
+func TestOpenSessionDoesNotDowngradeWrapperOwnedSource(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.OpenSession(context.Background(), "session-123", "claude", "/tmp/project", "wrapper_owned", "backend-123"); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.OpenSession(context.Background(), "session-123", "", "", "daemon_observed", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Source != "wrapper_owned" || reopened.ExternalID != "backend-123" {
+		t.Fatalf("reopened session = %+v, want wrapper-owned source preserved", reopened)
+	}
+}
+
+func TestEnsureObservedSessionPreservesExistingLifecycle(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.OpenSession(context.Background(), "session-123", "claude", "/tmp/project", "wrapper_owned", "backend-123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CloseSession(context.Background(), "session-123"); err != nil {
+		t.Fatal(err)
+	}
+
+	observed, err := store.EnsureObservedSession(context.Background(), "session-123", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Source != "wrapper_owned" ||
+		observed.Status != "closed" ||
+		observed.ExternalID != "backend-123" ||
+		observed.ClosedAt == nil {
+		t.Fatalf("observed session = %+v, want existing wrapper-owned closed session", observed)
+	}
+}
+
 func TestSessionsRejectsInvalidStoredTimestamp(t *testing.T) {
 	store, err := OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {

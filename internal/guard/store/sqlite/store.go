@@ -50,6 +50,18 @@ type SessionSummary struct {
 	LatestAt  time.Time `json:"latest_at"`
 }
 
+type SessionRecord struct {
+	ID         string     `json:"id"`
+	Agent      string     `json:"agent,omitempty"`
+	CWD        string     `json:"cwd,omitempty"`
+	Source     string     `json:"source,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	ExternalID string     `json:"external_id,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	ClosedAt   *time.Time `json:"closed_at,omitempty"`
+}
+
 func OpenStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -74,12 +86,16 @@ func (s *Store) Close() error {
 func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 create table if not exists agent_sessions (
-  id text primary key,
-  agent text,
-  cwd text,
-  created_at text not null,
-  updated_at text not null
-);
+	  id text primary key,
+	  agent text,
+	  cwd text,
+	  source text not null default 'daemon_observed',
+	  status text not null default 'open',
+	  external_id text,
+	  closed_at text,
+	  created_at text not null,
+	  updated_at text not null
+	);
 
 create table if not exists risk_decisions (
   id text primary key,
@@ -99,16 +115,121 @@ create table if not exists risk_decisions (
 
 create index if not exists idx_risk_decisions_session_created
 on risk_decisions(session_id, created_at);
-`)
+	`)
+	if err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		def  string
+	}{
+		{name: "source", def: "text not null default 'daemon_observed'"},
+		{name: "status", def: "text not null default 'open'"},
+		{name: "external_id", def: "text"},
+		{name: "closed_at", def: "text"},
+	} {
+		if err := s.ensureColumn(ctx, "agent_sessions", column.name, column.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, name, def string) error {
+	rows, err := s.db.QueryContext(ctx, "pragma table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if columnName == name {
+			return rows.Err()
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf("alter table %s add column %s %s", table, name, def))
 	return err
+}
+
+func (s *Store) OpenSession(ctx context.Context, sessionID, agent, cwd, source, externalID string) (SessionRecord, error) {
+	now := time.Now().UTC()
+	sessionID = normalizeSessionID(sessionID)
+	if source == "" {
+		source = "daemon_observed"
+	}
+	_, err := s.db.ExecContext(ctx, `
+insert into agent_sessions(id, agent, cwd, source, status, external_id, closed_at, created_at, updated_at)
+values(?, ?, ?, ?, 'open', ?, null, ?, ?)
+on conflict(id) do update set
+  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
+  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
+  source = case
+    when excluded.source = 'wrapper_owned' then excluded.source
+    when agent_sessions.source = 'wrapper_owned' then agent_sessions.source
+    else coalesce(nullif(excluded.source, ''), agent_sessions.source)
+  end,
+  status = 'open',
+  external_id = coalesce(nullif(excluded.external_id, ''), agent_sessions.external_id),
+  closed_at = null,
+  updated_at = excluded.updated_at
+	`, sessionID, agent, cwd, source, externalID, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	return s.Session(ctx, sessionID)
+}
+
+func (s *Store) EnsureObservedSession(ctx context.Context, sessionID, agent, cwd string) (SessionRecord, error) {
+	now := time.Now().UTC()
+	sessionID = normalizeSessionID(sessionID)
+	_, err := s.db.ExecContext(ctx, `
+insert into agent_sessions(id, agent, cwd, source, status, created_at, updated_at)
+values(?, ?, ?, 'daemon_observed', 'open', ?, ?)
+on conflict(id) do update set
+  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
+  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
+  updated_at = excluded.updated_at
+	`, sessionID, agent, cwd, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	return s.Session(ctx, sessionID)
+}
+
+func (s *Store) CloseSession(ctx context.Context, sessionID string) error {
+	sessionID = normalizeSessionID(sessionID)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+update agent_sessions
+set status = 'closed', closed_at = ?, updated_at = ?
+where id = ?
+	`, now, now, sessionID)
+	return err
+}
+
+func (s *Store) Session(ctx context.Context, sessionID string) (SessionRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+select id, coalesce(agent, ''), coalesce(cwd, ''), source, status, coalesce(external_id, ''),
+  created_at, updated_at, closed_at
+from agent_sessions
+where id = ?
+	`, sessionID)
+	return scanSession(row)
 }
 
 func (s *Store) SaveDecision(ctx context.Context, event risk.HookEvent, decision risk.RiskDecision) (DecisionRecord, error) {
 	now := time.Now().UTC()
-	sessionID := event.SessionID
-	if sessionID == "" {
-		sessionID = "local"
-	}
+	sessionID := normalizeSessionID(event.SessionID)
 	id := "evt_" + uuid.NewString()
 	riskEventJSON, err := json.Marshal(decision.RiskEvent)
 	if err != nil {
@@ -122,10 +243,13 @@ func (s *Store) SaveDecision(ctx context.Context, event risk.HookEvent, decision
 		_ = tx.Rollback()
 	}()
 	_, err = tx.ExecContext(ctx, `
-insert into agent_sessions(id, agent, cwd, created_at, updated_at)
-values(?, ?, ?, ?, ?)
-on conflict(id) do update set agent = excluded.agent, cwd = excluded.cwd, updated_at = excluded.updated_at
-`, sessionID, event.Agent, event.CWD, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+insert into agent_sessions(id, agent, cwd, source, status, created_at, updated_at)
+values(?, ?, ?, 'daemon_observed', 'open', ?, ?)
+on conflict(id) do update set
+  agent = coalesce(nullif(excluded.agent, ''), agent_sessions.agent),
+  cwd = coalesce(nullif(excluded.cwd, ''), agent_sessions.cwd),
+  updated_at = excluded.updated_at
+	`, sessionID, event.Agent, event.CWD, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return DecisionRecord{}, err
 	}
@@ -285,6 +409,43 @@ func scanDecision(scanner interface{ Scan(...any) error }) (DecisionRecord, erro
 	return record, nil
 }
 
+func scanSession(scanner interface{ Scan(...any) error }) (SessionRecord, error) {
+	var record SessionRecord
+	var created, updated string
+	var closed sql.NullString
+	if err := scanner.Scan(
+		&record.ID,
+		&record.Agent,
+		&record.CWD,
+		&record.Source,
+		&record.Status,
+		&record.ExternalID,
+		&created,
+		&updated,
+		&closed,
+	); err != nil {
+		return SessionRecord{}, err
+	}
+	createdAt, err := parseStoredTime("session created_at", created)
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	updatedAt, err := parseStoredTime("session updated_at", updated)
+	if err != nil {
+		return SessionRecord{}, err
+	}
+	record.CreatedAt = createdAt
+	record.UpdatedAt = updatedAt
+	if closed.Valid && closed.String != "" {
+		closedAt, err := parseStoredTime("session closed_at", closed.String)
+		if err != nil {
+			return SessionRecord{}, err
+		}
+		record.ClosedAt = &closedAt
+	}
+	return record, nil
+}
+
 func parseStoredTime(label, value string) (time.Time, error) {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
@@ -298,4 +459,11 @@ func nullableFloat(value *float64) any {
 		return nil
 	}
 	return *value
+}
+
+func normalizeSessionID(sessionID string) string {
+	if sessionID == "" {
+		return "local"
+	}
+	return sessionID
 }
