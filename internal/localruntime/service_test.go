@@ -49,8 +49,9 @@ func TestServiceCanAckTelemetryBeforeAsyncIngest(t *testing.T) {
 	client := NewClient(service.SocketPath())
 
 	result, err := client.Process(context.Background(), hook.Event{
-		HookName: hook.HookPostToolUse,
-		ToolName: "Bash",
+		SessionID: "agent-session",
+		HookName:  hook.HookPostToolUse,
+		ToolName:  "Bash",
 	})
 	if err != nil {
 		t.Fatalf("Process() error = %v", err)
@@ -63,6 +64,9 @@ func TestServiceCanAckTelemetryBeforeAsyncIngest(t *testing.T) {
 	case event := <-runtime.ingested:
 		if event.HookName != hook.HookPostToolUse {
 			t.Fatalf("ingested hook = %q, want PostToolUse", event.HookName)
+		}
+		if event.SessionID != "agent-session" {
+			t.Fatalf("ingested session = %q, want agent-session", event.SessionID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("async ingest did not run")

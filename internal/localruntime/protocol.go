@@ -10,6 +10,7 @@ import (
 
 type EvaluateRequest struct {
 	Type           string          `json:"type"`
+	SessionID      string          `json:"session_id,omitempty"`
 	Agent          string          `json:"agent"`
 	HookEvent      string          `json:"hook_event"`
 	ToolName       string          `json:"tool_name"`

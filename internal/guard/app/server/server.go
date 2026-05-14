@@ -57,6 +57,10 @@ func (s *Server) Handler() http.Handler {
 	return withCORS(s.mux)
 }
 
+func (s *Server) RuntimeCore() *runtimecore.Core {
+	return s.core
+}
+
 func (s *Server) ListenAndServe(addr string) error {
 	httpServer := &http.Server{
 		Addr:              addr,

@@ -18,6 +18,7 @@ import (
 	"github.com/cli/browser"
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
+	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/hooks/claudecode"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
@@ -27,6 +28,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	"github.com/kontext-security/kontext-cli/internal/guard/trace"
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/localruntime"
 )
 
 const (
@@ -105,6 +107,7 @@ func runDaemon(args []string, out io.Writer) error {
 	horizon := fs.Int("horizon", defaultHorizon, "Markov-chain risk horizon")
 	skipHookInstall := fs.Bool("skip-hook-install", false, "skip Claude Code hook install")
 	noOpen := fs.Bool("no-open", false, "do not open the local dashboard")
+	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -137,7 +140,25 @@ func runDaemon(args []string, out io.Writer) error {
 	defer func() {
 		_ = closeStore()
 	}()
+	if err := ensureGuardSocketDir(*socketPath); err != nil {
+		return err
+	}
+	runtimeService, err := localruntime.NewService(localruntime.Options{
+		SocketPath:  *socketPath,
+		Core:        localServer.RuntimeCore(),
+		AgentName:   "claude",
+		AsyncIngest: true,
+		Diagnostic:  diagnostic.New(out, diagnostic.EnabledFromEnv()),
+	})
+	if err != nil {
+		return err
+	}
+	if err := runtimeService.Start(context.Background()); err != nil {
+		return fmt.Errorf("local runtime start: %w", err)
+	}
+	defer runtimeService.Stop()
 	fmt.Fprintf(out, "Kontext Guard local daemon listening on http://%s\n", *addr)
+	fmt.Fprintf(out, "Hook runtime: unix://%s\n", *socketPath)
 	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
 	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
 	fmt.Fprintf(out, "Risk model: %s\n", activeModelPath)
@@ -169,6 +190,7 @@ func runHook(ctx context.Context, agentName string, a agent.Agent, args []string
 	fs := flag.NewFlagSet("hook "+a.Name(), flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
+	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
 	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookruntime.ModeObserve)), "hook mode: observe or enforce")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -178,7 +200,12 @@ func runHook(ctx context.Context, agentName string, a agent.Agent, args []string
 		return err
 	}
 	adapter := hookruntime.AgentAdapter{Agent: a, AgentName: agentName}
-	return hookruntime.Run(ctx, adapter, claudecode.NewClient(*baseURL), hookMode, stdin, stdout, stderr)
+	processor := guardHookProcessor{
+		socket:     localruntime.NewClient(*socketPath),
+		fallback:   claudecode.NewClient(*baseURL),
+		diagnostic: diagnostic.New(stderr, diagnostic.EnabledFromEnv()),
+	}
+	return hookruntime.Run(ctx, adapter, processor, hookMode, stdin, stdout, stderr)
 }
 
 func runStatus(ctx context.Context, args []string, out io.Writer) error {
