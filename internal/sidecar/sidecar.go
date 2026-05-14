@@ -15,7 +15,6 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/backend"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/hook"
-	"github.com/kontext-security/kontext-cli/internal/localruntime"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
@@ -91,7 +90,6 @@ type Server struct {
 	accessMode backend.HostedAccessMode
 	client     sidecarClient
 	core       *runtimecore.Core
-	local      *localruntime.Service
 	diagnostic diagnostic.Logger
 	cancel     context.CancelFunc
 }
@@ -119,8 +117,12 @@ func (s *Server) SocketPath() string { return s.socketPath }
 
 func (s *Server) AccessModePath() string { return s.modePath }
 
-func (s *Server) runtimeCore() *runtimecore.Core {
+func (s *Server) RuntimeCore() *runtimecore.Core {
 	return s.core
+}
+
+func (s *Server) RuntimeFailureResult(event hook.Event, err error) hook.Result {
+	return s.runtimeFailureResult(event, err)
 }
 
 func (s *Server) hostedRuntime() hostedHookRuntime {
@@ -155,40 +157,26 @@ func (s *Server) refreshAccessMode(mode backend.HostedAccessMode) error {
 	return nil
 }
 
-func (s *Server) Start(ctx context.Context) error {
-	if err := os.WriteFile(s.modePath, []byte(s.currentAccessMode()), 0o600); err != nil {
+func (s *Server) StartControlPlane(ctx context.Context) error {
+	if err := s.writeInitialAccessMode(); err != nil {
 		return err
 	}
+	s.startHeartbeat(ctx)
+	return nil
+}
 
-	local, err := localruntime.NewService(localruntime.Options{
-		SocketPath:  s.socketPath,
-		Core:        s.runtimeCore(),
-		SessionID:   s.sessionID,
-		AgentName:   s.agentName,
-		AsyncIngest: true,
-		OnFailure:   s.runtimeFailureResult,
-		Diagnostic:  s.diagnostic,
-	})
-	if err != nil {
-		return err
-	}
-	if err := local.Start(ctx); err != nil {
-		return err
-	}
-	s.local = local
+func (s *Server) writeInitialAccessMode() error {
+	return os.WriteFile(s.modePath, []byte(s.currentAccessMode()), 0o600)
+}
 
+func (s *Server) startHeartbeat(ctx context.Context) {
 	ctx, s.cancel = context.WithCancel(ctx)
 	go s.heartbeatLoop(ctx)
-
-	return nil
 }
 
 func (s *Server) Stop() {
 	if s.cancel != nil {
 		s.cancel()
-	}
-	if s.local != nil {
-		s.local.Stop()
 	}
 }
 
