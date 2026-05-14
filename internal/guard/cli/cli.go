@@ -115,7 +115,7 @@ func runDaemon(args []string, out io.Writer) error {
 		if err := verifyClaudeCode(); err != nil {
 			return err
 		}
-		if err := installClaudeHooks(out); err != nil {
+		if err := installClaudeHooks(out, *socketPath); err != nil {
 			return err
 		}
 	}
@@ -356,20 +356,29 @@ func hookCommands(raw any) []string {
 }
 
 func runHooks(args []string, out io.Writer) error {
-	if len(args) != 2 || args[1] != "claude-code" {
+	if len(args) < 2 || args[1] != "claude-code" {
 		return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
 	}
 	switch args[0] {
 	case "install":
-		return installClaudeHooks(out)
+		fs := flag.NewFlagSet("hooks install claude-code", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		return installClaudeHooks(out, *socketPath)
 	case "uninstall":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
+		}
 		return uninstallClaudeHooks(out)
 	default:
 		return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
 	}
 }
 
-func installClaudeHooks(out io.Writer) error {
+func installClaudeHooks(out io.Writer, socketPath string) error {
 	settingsPath, settings, err := readClaudeSettings()
 	if err != nil {
 		return err
@@ -377,7 +386,7 @@ func installClaudeHooks(out io.Writer) error {
 	if err := backupFile(settingsPath, "kontext-guard"); err != nil {
 		return err
 	}
-	hookCommand := installedHookCommand()
+	hookCommand := installedHookCommand(socketPath)
 	settings["hooks"] = mergeHooks(settings["hooks"], hookCommand)
 	if err := writeJSONFile(settingsPath, settings); err != nil {
 		return err
@@ -512,7 +521,7 @@ func isGuardHookEntry(entry any) bool {
 func isGuardHookCommand(command string) bool {
 	normalized := strings.ReplaceAll(command, "'", "")
 	return strings.Contains(normalized, "kontext guard hook claude-code") ||
-		(strings.Contains(normalized, "kontext hook --agent claude") && strings.Contains(normalized, "--mode observe"))
+		(strings.Contains(normalized, "kontext hook --agent claude") && strings.Contains(normalized, "--mode"))
 }
 
 func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
@@ -714,19 +723,26 @@ func selfPath() string {
 	return "kontext"
 }
 
-func installedHookCommand() string {
+func installedHookCommand(socketPath string) string {
 	if command := os.Getenv("KONTEXT_GUARD_HOOK_COMMAND"); strings.TrimSpace(command) != "" {
 		return command
+	}
+	if strings.TrimSpace(socketPath) == "" {
+		socketPath = defaultGuardSocketPath()
 	}
 	path := selfPath()
 	if strings.Contains(path, "go-build") {
 		if cwd, err := os.Getwd(); err == nil {
 			if _, statErr := os.Stat(filepath.Join(cwd, "cmd", "kontext")); statErr == nil {
-				return fmt.Sprintf("cd %s && go run ./cmd/kontext hook --agent claude --mode observe", shellQuote(cwd))
+				return fmt.Sprintf("cd %s && %s", shellQuote(cwd), installedHookInvocation("go run ./cmd/kontext", socketPath))
 			}
 		}
 	}
-	return fmt.Sprintf("%s hook --agent claude --mode observe", shellQuote(path))
+	return installedHookInvocation(shellQuote(path), socketPath)
+}
+
+func installedHookInvocation(launcher, socketPath string) string {
+	return fmt.Sprintf("%s hook --agent claude --mode \"${KONTEXT_MODE:-observe}\" --socket %s", launcher, shellQuote(socketPath))
 }
 
 func shellQuote(value string) string {
