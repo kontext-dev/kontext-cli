@@ -2,8 +2,6 @@
 
 <img src="assets/banner-cli.svg" alt="Kontext CLI banner" width="100%" />
 
-<p><strong>Local guardrails and scoped credentials for AI coding agents.</strong></p>
-
 <p>
   <a href="https://kontext.security">Website</a>
   ·
@@ -24,11 +22,13 @@
 
 ## What is Kontext CLI?
 
-Kontext CLI is an open-source command-line tool that gives AI coding agents local guardrails, scoped credentials, and readable tool-call traces — without changing how developers work.
+Kontext CLI is an open-source local safety runtime for AI coding agents.
 
-**Why we built it:** Agents like Claude Code now run shell commands, edit code, open pull requests, and call provider APIs from your machine. Most of the time that is exactly what you want. Sometimes it is `rm -rf`, `gcloud sql databases delete prod`, `git push --force main`, or a command that leaks a secret before you notice, [like it happened here](https://x.com/lifeof_jer/status/2048103471019434248). The same agents also need credentials, and long-lived keys in `.env` files are the wrong primitive for autonomous tools.
+It lets AI coding agents, starting with Claude Code, keep working from the developer's machine while Kontext evaluates tool calls locally, applies policy, records allow/deny decisions, and explains what happened in a local dashboard.
 
-**How it works:** `kontext guard start` runs locally: it captures Claude Code tool calls, redacts them, scores risk, and shows risky actions in a local dashboard. `kontext start --agent claude` adds the hosted layer: provider connection, short-lived scoped credentials, and team-visible traces. Use Guard when you want local visibility first; use hosted mode when credentials and team governance matter too.
+**Why we built it:** AI coding agents now run shell commands, edit code, open pull requests, and call provider APIs from your machine. Most of the time that is exactly what you want. Sometimes it is `rm -rf`, `gcloud sql databases delete prod`, `git push --force main`, or a command that leaks a secret before you notice, [like it happened here](https://x.com/lifeof_jer/status/2048103471019434248).
+
+**How it works:** `kontext guard start` runs locally. Agent hooks send tool events into the local runtime, deterministic policy handles known hard boundaries first, and probabilistic risk scoring evaluates allowed-but-ambiguous actions before Kontext stores the final decision and reason.
 
 ## Quick Start
 
@@ -38,113 +38,92 @@ kontext guard start
 claude
 ```
 
-That is it: local-only, no login, observe mode. The dashboard opens at `http://127.0.0.1:4765`.
+That is it: local-only, no login, local policy, local decisions. The dashboard opens at `http://127.0.0.1:4765`.
 
-To add short-lived credentials and team-visible traces, run `kontext start --agent claude` from a project with Claude Code installed.
+## Local Guard
 
-## Operating Modes
-
-| Mode | Command | Best for | Login required |
-| --- | --- | --- | --- |
-| Guard | `kontext guard start` | Local risk visibility, notifications, redacted local traces | No |
-| Hosted | `kontext start --agent claude` | Scoped credentials, shared traces, team governance | Yes |
+| Command | What it does |
+| --- | --- |
+| `kontext guard start` | Starts the local runtime, installs agent hooks, opens the dashboard, and evaluates tool calls locally. |
+| `kontext guard status` | Shows local Guard counters and daemon state. |
+| `kontext guard doctor` | Checks local daemon and agent hook setup. |
 
 ## What You Get
 
-| Capability | What it means |
-| --- | --- |
-| Local Guard mode | Watch Claude Code tool calls locally, score risk, and store redacted traces in SQLite. |
-| Observe-mode notifications | Surface `would ask` and `would deny` actions without blocking Claude Code. |
-| Local dashboard | Review sessions, commands, reasons, risk scores, and signals at `127.0.0.1:4765`. |
-| Scoped credentials | Replace hardcoded provider keys with short-lived tokens injected only for the active agent session. |
-| Managed env file | Keep provider placeholders in `.env.kontext` instead of raw secrets. |
-| Hosted connect | Connect missing user providers through a browser flow instead of leaking keys locally. |
-| Governed sessions | Stream PreToolUse and PostToolUse events to Kontext in hosted mode. |
-| Native runtime | One small Go binary. Guard mode has an embedded dashboard; installed users do not need Node or Docker. |
+Guard turns agent tool calls into local safety decisions before they touch the machine.
 
-## Managed Credentials
+```text
+agent tool call -> deterministic policy -> probabilistic risk -> safety decision -> dashboard
+```
 
-For hosted sessions, the CLI creates `.env.kontext` locally:
+**Local by default**
+Claude Code tool calls are evaluated on the developer machine. No account, cloud setup, Node, or Docker is required for the default Guard path.
+
+**Hard rules for known risk**
+Deterministic policy handles the obvious danger zones first: credentials, destructive commands, production resources, provider access, and risky paths. These boundaries stay stable and predictable.
+
+**Probabilistic risk for gray areas**
+When a tool call is not clearly safe or unsafe, the local risk model evaluates the action in context and turns it into a reasoned safety decision.
+
+**A dashboard that explains the call**
+Every decision shows the layer that shaped it, the matched policy when there was one, the probabilistic risk result when used, the reason, and the final outcome.
+
+## Optional Team Layer
+
+Guard is the default path. Teams can add managed sessions when they want browser login, short-lived scoped credentials, and shared traces on top of local safety.
+
+```bash
+kontext start --agent claude
+```
+
+Managed sessions keep credentials out of agent config and project files. The CLI creates `.env.kontext` with provider placeholders:
 
 ```dotenv
 GITHUB_TOKEN={{kontext:github}}
 LINEAR_API_KEY={{kontext:linear}}
 ```
 
-`.env.kontext` stores provider placeholders, not long-lived provider keys. At runtime, hosted mode exchanges placeholders such as `{{kontext:github}}` for short-lived scoped credentials. Keep `.env.kontext` out of source control in repos that do not already ignore it. Literal values you add stay untouched.
+At runtime, Kontext exchanges those placeholders for short-lived scoped credentials for the active agent session. Literal values you add stay untouched.
 
-## Providers and Traces
-
-Provider setup and trace review live in the hosted dashboard at [app.kontext.security](https://app.kontext.security). Use the same account you used for `kontext login`.
-
-**Add providers**
-
-1. Open **Providers** in the dashboard.
-2. Add a built-in provider, such as GitHub or Linear, or create a custom provider.
-3. For built-in providers, configure allowed scopes and any provider-specific OAuth settings shown in the dashboard. For custom providers, choose end-user OAuth, end-user key, or organization key.
-4. Open **Applications** → **kontext-cli** → **Providers** and attach the providers the CLI application can use.
-5. Reference the provider handles in `.env.kontext`.
-
-**Check traces**
-
-1. Run `kontext start --agent claude`.
-2. Ask Claude Code to perform a tool-using task.
-3. Open **Traces** in the dashboard to inspect live hook events, tool calls, outcomes, user attribution, and session context.
+> **Scaling across an organization?**
+>
+> We help with enterprise identity, audit retention, organization controls, deployment planning, custom usage volume, and onboarding for security and platform teams. [Contact michel@kontext.security](mailto:michel@kontext.security) or [book here](https://calendar.superhuman.com/book/11W5Y8b5JsB8dOzQbd/YECs9).
 
 ## Security
 
-- Guard mode is local-only by default: no login, no hosted API, no trace upload.
-- Guard mode stores redacted events in local SQLite and scores risk with local rules plus a local JSON Markov-chain model.
-- Hosted mode uses OIDC browser login with refresh tokens stored in the system keyring.
-- Hosted mode uses RFC 8693 token exchange for short-lived, provider-scoped runtime credentials.
-- Provider credentials stored in Kontext are encrypted at rest with AES-256-GCM.
-- Long-lived provider keys are not written to the project or agent config by Kontext.
+- Guard is local-only by default: no login and no trace upload.
+- Guard stores redacted events, policy decisions, matched rules, and risk metadata in local SQLite.
+- Deterministic policy runs before probabilistic risk scoring, so known hard boundaries do not depend on model judgment.
+- Probabilistic risk scoring returns an allow/deny decision plus a reason for dashboard diagnostics.
 - Kontext captures tool events and outcomes. It does not capture LLM reasoning, token usage, or full conversation history.
 
 ## Supported Agents
 
-| Agent | Guard mode | Hosted mode | Status |
-| --- | --- | --- | --- |
-| Claude Code | `kontext guard start` | `kontext start --agent claude` | Active |
+| Agent | Guard command | Status |
+| --- | --- | --- |
+| Claude Code | `kontext guard start` | Active |
+| Codex | Coming soon | In development |
 
-Cursor, Copilot, and Codex support are planned, but they are not shipped in this repo yet.
+Claude Desktop, Cursor, and Copilot support are planned, but they are not shipped in this repo yet.
 
 ## Architecture
 
-Guard mode:
+Local Guard:
 
 ```text
 kontext guard start
   │
-  ├─ Hooks: generated Claude Code settings.json
+  ├─ Hooks: Claude Code tool events
   │    │
   │    ├─ PreToolUse        → kontext hook --agent claude --mode observe
   │    ├─ PostToolUse       → kontext hook --agent claude --mode observe
   │
   ├─ Local runtime: Unix socket service + RuntimeCore
   ├─ Local daemon: 127.0.0.1:4765
-  ├─ Risk engine: deterministic rules + Markov-chain score
-  ├─ Store: local SQLite with redacted events
-  └─ Dashboard: embedded local web UI + notifications
-```
-
-Hosted mode:
-
-```text
-kontext start --agent claude
-  │
-  ├─ Auth: OIDC refresh token from system keyring
-  ├─ ConnectRPC: CreateSession → governed session in dashboard
-  ├─ BootstrapCli: sync managed provider entries into .env.kontext
-  ├─ Token exchange: {{kontext:provider}} → short-lived credential
-  ├─ Local runtime: Unix socket service + RuntimeCore
-  ├─ Hosted control plane: access mode + heartbeat loop
-  ├─ Hooks: generated Claude Code settings.json
-  │    │
-  │    ├─ PreToolUse        → kontext hook --agent claude → local runtime → ProcessHookEvent
-  │    ├─ PostToolUse       → kontext hook --agent claude → local runtime → ProcessHookEvent
-  │
-  └─ Exit: EndSession → credential expiry + temp file cleanup
+  ├─ Deterministic policy: curated rule categories + active profile
+  ├─ Probabilistic risk: allow/deny for ambiguous actions
+  ├─ Store: local SQLite with redacted events and decision metadata
+  └─ Dashboard: policy controls, decision diagnostics, notifications
 ```
 
 ## Useful Commands
@@ -152,9 +131,8 @@ kontext start --agent claude
 ```bash
 kontext guard status      # show local Guard counters
 kontext guard dashboard   # open or print the local dashboard URL
-kontext guard doctor      # check daemon and Claude Code hook state
+kontext guard doctor      # check daemon and agent hook state
 kontext doctor            # inspect global Kontext CLI setup
-kontext start --verbose   # print redacted hosted-mode diagnostics
 ```
 
 ## Development
