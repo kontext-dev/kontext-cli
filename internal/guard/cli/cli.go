@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/agent"
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
-	"github.com/kontext-security/kontext-cli/internal/guard/app/hooks/claudecode"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
 	"github.com/kontext-security/kontext-cli/internal/guard/hookruntime"
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
@@ -189,7 +187,6 @@ func runHookCommand(ctx context.Context, args []string, stdin io.Reader, stdout,
 func runHook(ctx context.Context, agentName string, a agent.Agent, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("hook "+a.Name(), flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	baseURL := fs.String("daemon-url", envString("KONTEXT_DAEMON_URL", defaultBaseURL), "local daemon URL")
 	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
 	mode := fs.String("mode", envString("KONTEXT_MODE", string(hookruntime.ModeObserve)), "hook mode: observe or enforce")
 	if err := fs.Parse(args); err != nil {
@@ -200,11 +197,7 @@ func runHook(ctx context.Context, agentName string, a agent.Agent, args []string
 		return err
 	}
 	adapter := hookruntime.AgentAdapter{Agent: a, AgentName: agentName}
-	processor := guardHookProcessor{
-		socket:     localruntime.NewClient(*socketPath),
-		fallback:   claudecode.NewClient(*baseURL),
-		diagnostic: diagnostic.New(stderr, diagnostic.EnabledFromEnv()),
-	}
+	processor := localruntime.NewClient(*socketPath)
 	return hookruntime.Run(ctx, adapter, processor, hookMode, stdin, stdout, stderr)
 }
 
@@ -544,18 +537,22 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	socketPath := filepath.Join(dir, "kontext.sock")
+	runtimeService, err := localruntime.NewService(localruntime.Options{
+		SocketPath:  socketPath,
+		Core:        localServer.RuntimeCore(),
+		AgentName:   "claude",
+		AsyncIngest: true,
+		Diagnostic:  diagnostic.New(io.Discard, false),
+	})
 	if err != nil {
 		return err
 	}
-	httpServer := &http.Server{Handler: localServer.Handler()}
-	go func() {
-		_ = httpServer.Serve(listener)
-	}()
-	defer func() {
-		_ = httpServer.Shutdown(ctx)
-	}()
-	client := claudecode.NewClient("http://" + listener.Addr().String())
+	if err := runtimeService.Start(ctx); err != nil {
+		return err
+	}
+	defer runtimeService.Stop()
+	client := localruntime.NewClient(socketPath)
 	cases := []struct {
 		name string
 		ev   hook.Event

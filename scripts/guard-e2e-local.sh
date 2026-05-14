@@ -9,6 +9,7 @@ BASE_URL="http://127.0.0.1:${PORT}"
 TMP_DIR="$(mktemp -d)"
 DB_PATH="${TMP_DIR}/kontext-e2e.db"
 LOG_PATH="${TMP_DIR}/daemon.log"
+SOCKET_PATH="${TMP_DIR}/kontext.sock"
 SESSION_ID="e2e-local"
 
 cleanup() {
@@ -25,6 +26,7 @@ KONTEXT_NOTIFY=0 go run ./cmd/kontext guard start --skip-hook-install --no-open 
   --addr "127.0.0.1:${PORT}" \
   --db "$DB_PATH" \
   --model models/guard/coding-agent-v0.json \
+  --socket "$SOCKET_PATH" \
   --threshold 0.3 >"$LOG_PATH" 2>&1 &
 DAEMON_PID=$!
 
@@ -50,7 +52,7 @@ assert_hook() {
   local expected_phrase="$4"
   local output
 
-  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --daemon-url "$BASE_URL")"
+  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --socket "$SOCKET_PATH")"
   EXPECTED_REASON="$expected_reason" EXPECTED_PHRASE="$expected_phrase" node -e '
 const expectedReason = process.env.EXPECTED_REASON;
 const expectedPhrase = process.env.EXPECTED_PHRASE;
@@ -79,7 +81,7 @@ assert_telemetry_hook() {
   local payload="$2"
   local output
 
-  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --daemon-url "$BASE_URL")"
+  output="$(printf '%s' "$payload" | go run ./cmd/kontext guard hook claude-code --socket "$SOCKET_PATH")"
   node -e '
 let raw = "";
 process.stdin.on("data", (chunk) => raw += chunk);
@@ -154,4 +156,4 @@ curl -fsS "$BASE_URL" | grep -q "<title>Kontext Guard</title>"
 go run ./cmd/kontext guard status --daemon-url "$BASE_URL" | grep -q "1 critical"
 go run ./cmd/kontext guard doctor --daemon-url "$BASE_URL" | grep -q "daemon healthy"
 
-echo "E2E passed: hook -> daemon -> risk engine -> Markov score -> SQLite -> dashboard API"
+echo "E2E passed: hook -> local runtime -> RuntimeCore -> risk engine -> SQLite -> dashboard API"

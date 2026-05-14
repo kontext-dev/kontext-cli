@@ -121,6 +121,7 @@ kontext guard start
   │    ├─ PreToolUse        → kontext hook --agent claude --mode observe
   │    ├─ PostToolUse       → kontext hook --agent claude --mode observe
   │
+  ├─ Local runtime: Unix socket service + RuntimeCore
   ├─ Local daemon: 127.0.0.1:4765
   ├─ Risk engine: deterministic rules + Markov-chain score
   ├─ Store: local SQLite with redacted events
