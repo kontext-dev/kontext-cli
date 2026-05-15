@@ -3,6 +3,8 @@ package risk
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/kontext-security/kontext-cli/internal/hook"
 )
 
 type HookEvent struct {
@@ -28,12 +30,12 @@ const (
 	EventUnknown                      EventType = "unknown"
 )
 
-type Decision string
+type Decision = hook.Decision
 
 const (
-	DecisionAllow Decision = "allow"
-	DecisionAsk   Decision = "ask"
-	DecisionDeny  Decision = "deny"
+	DecisionAllow = hook.DecisionAllow
+	DecisionAsk   = hook.DecisionAsk
+	DecisionDeny  = hook.DecisionDeny
 )
 
 type RiskEvent struct {

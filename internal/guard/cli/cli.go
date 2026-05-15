@@ -30,6 +30,10 @@ import (
 const (
 	defaultBaseURL   = "http://" + server.DefaultAddr
 	defaultModelPath = "models/guard/coding-agent-v0.json"
+
+	hooksUsage  = "usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code"
+	tracesUsage = "usage: kontext guard traces inspect"
+	modelUsage  = "usage: kontext guard model info|train"
 )
 
 // Run executes the Kontext command line.
@@ -317,7 +321,7 @@ func hookCommands(raw any) []string {
 
 func runHooks(args []string, out io.Writer) error {
 	if len(args) < 2 || args[1] != "claude-code" {
-		return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
+		return fmt.Errorf(hooksUsage)
 	}
 	switch args[0] {
 	case "install":
@@ -330,11 +334,11 @@ func runHooks(args []string, out io.Writer) error {
 		return installClaudeHooks(out, *socketPath)
 	case "uninstall":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
+			return fmt.Errorf(hooksUsage)
 		}
 		return uninstallClaudeHooks(out)
 	default:
-		return fmt.Errorf("usage: kontext guard hooks install claude-code | kontext guard hooks uninstall claude-code")
+		return fmt.Errorf(hooksUsage)
 	}
 }
 
@@ -554,19 +558,19 @@ func runSmokeTest(ctx context.Context, args []string, out io.Writer) error {
 
 func runTraces(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kontext guard traces inspect")
+		return fmt.Errorf(tracesUsage)
 	}
 	switch args[0] {
 	case "inspect":
 		return runStatus(ctx, args[1:], out)
 	default:
-		return fmt.Errorf("usage: kontext guard traces inspect")
+		return fmt.Errorf(tracesUsage)
 	}
 }
 
 func runModel(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kontext guard model info|train")
+		return fmt.Errorf(modelUsage)
 	}
 	switch args[0] {
 	case "info":
@@ -579,7 +583,7 @@ func runModel(args []string, out io.Writer) error {
 	case "train":
 		return runTrainFixtureModel(args[1:], out)
 	default:
-		return fmt.Errorf("usage: kontext guard model info|train")
+		return fmt.Errorf(modelUsage)
 	}
 }
 

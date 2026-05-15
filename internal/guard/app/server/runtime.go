@@ -55,14 +55,14 @@ func (r guardHookRuntime) EnsureSessionForEvent(ctx context.Context, event hook.
 }
 
 func (r guardHookRuntime) EvaluateHook(ctx context.Context, event hook.Event) (hook.Result, error) {
-	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
-	if err != nil {
-		return hook.Result{}, err
-	}
-	return hookResultFromRiskDecision(decision), nil
+	return r.processHook(ctx, event)
 }
 
 func (r guardHookRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
+	return r.processHook(ctx, event)
+}
+
+func (r guardHookRuntime) processHook(ctx context.Context, event hook.Event) (hook.Result, error) {
 	decision, err := r.decideAndRecord(ctx, riskEventFromHookEvent(event))
 	if err != nil {
 		return hook.Result{}, err

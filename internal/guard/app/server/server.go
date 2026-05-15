@@ -12,6 +12,7 @@ import (
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
+	"github.com/kontext-security/kontext-cli/internal/hook"
 	"github.com/kontext-security/kontext-cli/internal/runtimecore"
 )
 
@@ -82,23 +83,19 @@ func (s *Server) routes() {
 }
 
 func (s *Server) EvaluateHook(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	result, err := s.core.EvaluateHook(ctx, hookEventFromRiskEvent(event))
-	if err != nil {
-		return risk.RiskDecision{}, err
-	}
-	return riskDecisionFromHookResult(result), nil
+	return s.processWithCore(ctx, event, s.core.EvaluateHook)
 }
 
 func (s *Server) IngestEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	result, err := s.core.IngestEvent(ctx, hookEventFromRiskEvent(event))
-	if err != nil {
-		return risk.RiskDecision{}, err
-	}
-	return riskDecisionFromHookResult(result), nil
+	return s.processWithCore(ctx, event, s.core.IngestEvent)
 }
 
 func (s *Server) ProcessHookEvent(ctx context.Context, event risk.HookEvent) (risk.RiskDecision, error) {
-	result, err := s.core.ProcessHook(ctx, hookEventFromRiskEvent(event))
+	return s.processWithCore(ctx, event, s.core.ProcessHook)
+}
+
+func (s *Server) processWithCore(ctx context.Context, event risk.HookEvent, process func(context.Context, hook.Event) (hook.Result, error)) (risk.RiskDecision, error) {
+	result, err := process(ctx, hookEventFromRiskEvent(event))
 	if err != nil {
 		return risk.RiskDecision{}, err
 	}
