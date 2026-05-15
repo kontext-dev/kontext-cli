@@ -75,6 +75,18 @@ The judge receives a small redacted JSON input with tool metadata, normalized ri
 
 Judge failures are fail-open for launch. If the local runtime is unavailable, times out, or returns invalid JSON, Guard records `judge_unavailable_allow` plus high-level metadata and allows the tool call. Judge URLs must point at localhost.
 
+Evaluate a local judge against the launch fixtures:
+
+```bash
+kontext guard judge eval \
+  --judge-url http://127.0.0.1:8080 \
+  --judge-model Qwen/Qwen3-0.6B-GGUF \
+  --fixtures internal/guard/judge/testdata/launch-v0.jsonl
+```
+
+The eval command is for local model and prompt iteration. It skips fixtures
+where deterministic policy is expected to deny before the judge is called.
+
 ## Public/private boundary
 
 Public in `kontext-cli`:

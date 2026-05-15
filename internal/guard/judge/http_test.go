@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,11 +59,69 @@ func TestOpenAICompatibleJudgeCallsChatCompletions(t *testing.T) {
 	if request.Model != "qwen3-0.6b-q4" || len(request.Messages) != 2 {
 		t.Fatalf("request = %+v", request)
 	}
+	if !strings.HasPrefix(request.Messages[1].Content, "/no_think") {
+		t.Fatalf("user message should disable thinking, got %q", request.Messages[1].Content)
+	}
 	if request.MaxTokens != 256 {
 		t.Fatalf("max tokens = %d, want 256", request.MaxTokens)
 	}
 	if result.Output.Decision != DecisionAllow || result.Metadata.Model != "qwen3-0.6b-q4" {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestOpenAICompatibleJudgeDoesNotDisableThinkingForGenericModel(t *testing.T) {
+	var request openAIChatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"decision\":\"allow\",\"risk_level\":\"low\",\"categories\":[\"normal_coding\"],\"reason\":\"Reads a project file.\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	localJudge, err := NewOpenAICompatibleJudge(HTTPOptions{
+		BaseURL: server.URL,
+		Model:   "generic-local-model",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localJudge.Decide(context.Background(), Input{HookEvent: "PreToolUse"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(request.Messages[1].Content, "/no_think") {
+		t.Fatalf("generic model should not receive /no_think, got %q", request.Messages[1].Content)
+	}
+}
+
+func TestOpenAICompatibleJudgeCanExplicitlyDisableThinking(t *testing.T) {
+	var request openAIChatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"decision\":\"allow\",\"risk_level\":\"low\",\"categories\":[\"normal_coding\"],\"reason\":\"Reads a project file.\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	localJudge, err := NewOpenAICompatibleJudge(HTTPOptions{
+		BaseURL:         server.URL,
+		Model:           "generic-local-model",
+		Timeout:         time.Second,
+		DisableThinking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localJudge.Decide(context.Background(), Input{HookEvent: "PreToolUse"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(request.Messages[1].Content, "/no_think") {
+		t.Fatalf("user message should disable thinking, got %q", request.Messages[1].Content)
 	}
 }
 

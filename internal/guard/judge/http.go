@@ -23,19 +23,21 @@ const (
 var defaultPrompt string
 
 type HTTPOptions struct {
-	BaseURL    string
-	Model      string
-	Timeout    time.Duration
-	HTTPClient *http.Client
-	Prompt     string
+	BaseURL         string
+	Model           string
+	Timeout         time.Duration
+	HTTPClient      *http.Client
+	Prompt          string
+	DisableThinking bool
 }
 
 type OpenAICompatibleJudge struct {
-	endpoint   string
-	model      string
-	timeout    time.Duration
-	httpClient *http.Client
-	prompt     string
+	endpoint        string
+	model           string
+	timeout         time.Duration
+	httpClient      *http.Client
+	prompt          string
+	disableThinking bool
 }
 
 func NewOpenAICompatibleJudge(opts HTTPOptions) (*OpenAICompatibleJudge, error) {
@@ -64,11 +66,12 @@ func NewOpenAICompatibleJudge(opts HTTPOptions) (*OpenAICompatibleJudge, error) 
 		prompt = defaultPrompt
 	}
 	return &OpenAICompatibleJudge{
-		endpoint:   endpoint,
-		model:      model,
-		timeout:    timeout,
-		httpClient: client,
-		prompt:     prompt,
+		endpoint:        endpoint,
+		model:           model,
+		timeout:         timeout,
+		httpClient:      client,
+		prompt:          prompt,
+		disableThinking: opts.DisableThinking || shouldDisableThinking(model),
 	}, nil
 }
 
@@ -137,17 +140,25 @@ func (j *OpenAICompatibleJudge) requestBody(input Input) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal judge input: %w", err)
 	}
+	userContent := string(inputJSON)
+	if j.disableThinking {
+		userContent = "/no_think\n\n" + userContent
+	}
 	request := openAIChatRequest{
 		Model: j.model,
 		Messages: []openAIMessage{
 			{Role: "system", Content: j.prompt},
-			{Role: "user", Content: string(inputJSON)},
+			{Role: "user", Content: userContent},
 		},
 		Temperature:    0,
 		MaxTokens:      256,
 		ResponseFormat: map[string]string{"type": "json_object"},
 	}
 	return json.Marshal(request)
+}
+
+func shouldDisableThinking(model string) bool {
+	return strings.Contains(strings.ToLower(model), "qwen3")
 }
 
 func ParseOutput(content string) (Output, error) {
