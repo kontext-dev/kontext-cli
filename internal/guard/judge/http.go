@@ -25,6 +25,7 @@ var defaultPrompt string
 type HTTPOptions struct {
 	BaseURL         string
 	Model           string
+	Runtime         string
 	Timeout         time.Duration
 	HTTPClient      *http.Client
 	Prompt          string
@@ -34,6 +35,7 @@ type HTTPOptions struct {
 type OpenAICompatibleJudge struct {
 	endpoint        string
 	model           string
+	runtime         string
 	timeout         time.Duration
 	httpClient      *http.Client
 	prompt          string
@@ -53,6 +55,10 @@ func NewOpenAICompatibleJudge(opts HTTPOptions) (*OpenAICompatibleJudge, error) 
 	if model == "" {
 		return nil, errors.New("judge model is required")
 	}
+	runtime := strings.TrimSpace(opts.Runtime)
+	if runtime == "" {
+		runtime = DefaultRuntime
+	}
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -68,6 +74,7 @@ func NewOpenAICompatibleJudge(opts HTTPOptions) (*OpenAICompatibleJudge, error) 
 	return &OpenAICompatibleJudge{
 		endpoint:        endpoint,
 		model:           model,
+		runtime:         runtime,
 		timeout:         timeout,
 		httpClient:      client,
 		prompt:          prompt,
@@ -129,7 +136,7 @@ func (j *OpenAICompatibleJudge) Metadata() Metadata {
 
 func (j *OpenAICompatibleJudge) metadata(durationMs int64) Metadata {
 	return Metadata{
-		Runtime:    DefaultRuntime,
+		Runtime:    j.runtime,
 		Model:      j.model,
 		DurationMs: durationMs,
 	}

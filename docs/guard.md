@@ -71,6 +71,33 @@ kontext guard start \
   --judge-model qwen3-0.6b-q4
 ```
 
+Guard can also manage `llama-server` itself. This downloads the selected GGUF into the Kontext model cache when it is missing, starts `llama-server` on loopback, waits for `/v1/models`, and shuts the child process down with Guard:
+
+```bash
+kontext guard start --judge-managed
+```
+
+Use `--judge-port` or a loopback `--judge-url` such as `http://127.0.0.1:18081` to choose a different managed `llama-server` port.
+
+The managed default is `Qwen/Qwen3-0.6B-GGUF` with `Qwen3-0.6B-Q8_0.gguf`. Override it with either a local model path:
+
+```bash
+kontext guard start \
+  --judge-managed \
+  --judge-model-path ~/.config/kontext/judge-models/qwen.gguf
+```
+
+Or a specific Hugging Face GGUF:
+
+```bash
+kontext guard start \
+  --judge-managed \
+  --judge-hf-repo Qwen/Qwen3-0.6B-GGUF \
+  --judge-hf-file Qwen3-0.6B-Q8_0.gguf
+```
+
+Use `--judge-hf-revision` when the GGUF is on a Hugging Face branch, tag, commit, or ref other than `main`.
+
 The judge receives a small redacted JSON input with tool metadata, normalized risk fields, deterministic policy context, and no full conversation history. It must return structured JSON with `decision` set to `allow` or `deny`. `ask` is not part of the judge contract.
 
 Judge failures are fail-open for launch. If the local runtime is unavailable, times out, or returns invalid JSON, Guard records `judge_unavailable_allow` plus high-level metadata and allows the tool call. Judge URLs must point at localhost.

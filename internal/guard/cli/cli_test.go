@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 )
 
 func TestGuardHookCompatibilityCommandIsRetired(t *testing.T) {
@@ -214,5 +216,93 @@ func TestJudgeEvalChecksExpectedRiskCategoriesAndReason(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("stdout = %s, want %q", output, want)
 		}
+	}
+}
+
+func TestConfigureManagedJudgeFailsOpenWhenModelMissing(t *testing.T) {
+	localJudge, closeJudge, status, err := configureLocalJudge(context.Background(), localJudgeConfig{
+		Managed:   true,
+		ModelPath: filepath.Join(t.TempDir(), "missing.gguf"),
+		Model:     "qwen",
+		Port:      18082,
+	})
+	defer closeJudge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localJudge == nil {
+		t.Fatal("localJudge = nil, want unavailable judge")
+	}
+	if !strings.Contains(status, "unavailable") {
+		t.Fatalf("status = %q, want unavailable", status)
+	}
+	_, err = localJudge.Decide(context.Background(), judge.Input{HookEvent: "PreToolUse"})
+	if judge.FailureKind(err) != judge.FailureUnavailable {
+		t.Fatalf("FailureKind(err) = %q, want unavailable", judge.FailureKind(err))
+	}
+}
+
+func TestConfigureManagedJudgeUsesJudgeModelAsGGUFPath(t *testing.T) {
+	modelPath := filepath.Join(t.TempDir(), "qwen.gguf")
+	localJudge, closeJudge, status, err := configureLocalJudge(context.Background(), localJudgeConfig{
+		Managed: true,
+		Model:   modelPath,
+		Port:    18083,
+	})
+	defer closeJudge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localJudge == nil {
+		t.Fatal("localJudge = nil, want unavailable judge")
+	}
+	if !strings.Contains(status, "qwen.gguf") {
+		t.Fatalf("status = %q, want model basename", status)
+	}
+}
+
+func TestResolvedJudgeCacheDirUsesParsedDBPath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "custom", "guard.db")
+	got := resolvedJudgeCacheDir("", dbPath)
+	want := filepath.Join(filepath.Dir(dbPath), "judge-models")
+	if got != want {
+		t.Fatalf("cache dir = %q, want %q", got, want)
+	}
+}
+
+func TestResolvedJudgeCacheDirPrefersExplicitValue(t *testing.T) {
+	got := resolvedJudgeCacheDir("/explicit/cache", filepath.Join(t.TempDir(), "guard.db"))
+	if got != "/explicit/cache" {
+		t.Fatalf("cache dir = %q, want explicit cache", got)
+	}
+}
+
+func TestManagedJudgeListenConfigDefaultsToJudgePort(t *testing.T) {
+	host, port, baseURL, err := managedJudgeListenConfig("", 18081)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != judge.DefaultLlamaServerHost || port != 18081 || baseURL != "http://127.0.0.1:18081" {
+		t.Fatalf("host=%q port=%d baseURL=%q", host, port, baseURL)
+	}
+}
+
+func TestManagedJudgeListenConfigAppliesJudgeURLPort(t *testing.T) {
+	host, port, baseURL, err := managedJudgeListenConfig("http://localhost:18082/v1", 18081)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host != "localhost" || port != 18082 || baseURL != "http://localhost:18082" {
+		t.Fatalf("host=%q port=%d baseURL=%q", host, port, baseURL)
+	}
+}
+
+func TestManagedJudgeListenConfigRejectsHTTPS(t *testing.T) {
+	_, _, _, err := managedJudgeListenConfig("https://127.0.0.1:18082", 18081)
+	if err == nil {
+		t.Fatal("managedJudgeListenConfig() error = nil, want HTTPS rejection")
+	}
+	if !strings.Contains(err.Error(), "managed judge URL must use http") {
+		t.Fatalf("err = %v, want managed http error", err)
 	}
 }
