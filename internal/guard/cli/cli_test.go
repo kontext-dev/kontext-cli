@@ -115,3 +115,15 @@ func TestStartRejectsInvalidNumericEnvironment(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestValidateLocalJudgeURLRejectsHostedURL(t *testing.T) {
+	if err := validateLocalJudgeURL("https://api.example.com/v1"); err == nil {
+		t.Fatal("validateLocalJudgeURL() error = nil, want hosted URL rejection")
+	}
+}
+
+func TestValidateLocalJudgeURLAllowsLoopback(t *testing.T) {
+	if err := validateLocalJudgeURL("http://127.0.0.1:8080"); err != nil {
+		t.Fatalf("validateLocalJudgeURL() error = %v", err)
+	}
+}
