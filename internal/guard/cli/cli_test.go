@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -77,18 +78,20 @@ func TestIsGuardHookCommandRecognizesInstalledGuardHooks(t *testing.T) {
 func TestMergeHooksInstallsOnlyToolHooks(t *testing.T) {
 	t.Parallel()
 
-	hooks := mergeHooks(map[string]any{
-		"UserPromptSubmit": []any{
-			map[string]any{
-				"hooks": []any{
-					map[string]any{
-						"type":    "command",
-						"command": "/usr/local/bin/kontext guard hook claude-code",
-					},
-				},
-			},
+	legacyEntry, err := json.Marshal(claudeHookEntry{
+		Hooks: []claudeHookAction{
+			{Type: "command", Command: "/usr/local/bin/kontext guard hook claude-code"},
 		},
+	})
+	if err != nil {
+		t.Fatalf("marshal legacy hook entry: %v", err)
+	}
+	hooks, err := mergeHooks(claudeHooks{
+		"UserPromptSubmit": {legacyEntry},
 	}, `/usr/local/bin/kontext hook --agent claude --mode "${KONTEXT_MODE:-observe}" --socket /tmp/kontext.sock`)
+	if err != nil {
+		t.Fatalf("mergeHooks: %v", err)
+	}
 
 	if _, ok := hooks["PreToolUse"]; !ok {
 		t.Fatal("PreToolUse hook missing")

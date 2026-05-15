@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -253,22 +254,24 @@ func PrintHookStatus(out io.Writer) {
 		return
 	}
 	fmt.Fprintf(out, "Claude Code settings: %s\n", settingsPath)
-	hooks, ok := settings["hooks"].(map[string]any)
+	hooks, ok := claudeHooksFromSettings(settings)
 	if !ok || len(hooks) == 0 {
 		fmt.Fprintln(out, "Claude Code hooks: none installed")
 		return
 	}
 	hosted := false
 	guard := false
-	for _, raw := range hooks {
-		for _, command := range hookCommands(raw) {
-			switch {
-			case isGuardHookCommand(command):
-				guard = true
-				fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
-			case strings.Contains(command, "kontext hook"):
-				hosted = true
-				fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+	for _, entries := range hooks {
+		for _, entry := range entries {
+			for _, command := range hookCommands(entry) {
+				switch {
+				case isGuardHookCommand(command):
+					guard = true
+					fmt.Fprintf(out, "Claude Code Guard hook: %s\n", command)
+				case strings.Contains(command, "kontext hook"):
+					hosted = true
+					fmt.Fprintf(out, "Claude Code hosted hook: %s\n", command)
+				}
 			}
 		}
 	}
@@ -287,32 +290,62 @@ func PrintHookStatus(out io.Writer) {
 	fmt.Fprintln(out, "Claude Code hook mode: no Kontext hook detected")
 }
 
-func hookCommands(raw any) []string {
-	groups, ok := raw.([]any)
-	if !ok {
+type claudeSettings map[string]json.RawMessage
+
+type claudeHooks map[string][]json.RawMessage
+
+type claudeHookEntry struct {
+	Matcher string             `json:"matcher,omitempty"`
+	Hooks   []claudeHookAction `json:"hooks,omitempty"`
+}
+
+type claudeHookAction struct {
+	Type    string `json:"type,omitempty"`
+	Command string `json:"command,omitempty"`
+}
+
+func hookCommands(raw json.RawMessage) []string {
+	var entry claudeHookEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
 		return nil
 	}
 	var commands []string
-	for _, group := range groups {
-		groupMap, ok := group.(map[string]any)
-		if !ok {
+	for _, hook := range entry.Hooks {
+		if hook.Type != "command" || strings.TrimSpace(hook.Command) == "" {
 			continue
 		}
-		hooks, ok := groupMap["hooks"].([]any)
-		if !ok {
-			continue
-		}
-		for _, hook := range hooks {
-			hookMap, ok := hook.(map[string]any)
-			if !ok {
-				continue
-			}
-			if command, ok := hookMap["command"].(string); ok {
-				commands = append(commands, command)
-			}
-		}
+		commands = append(commands, hook.Command)
 	}
 	return commands
+}
+
+func claudeHooksFromSettings(settings claudeSettings) (claudeHooks, bool) {
+	raw, ok := settings["hooks"]
+	if !ok || isJSONNullOrEmpty(raw) {
+		return nil, false
+	}
+	var hooks claudeHooks
+	if err := json.Unmarshal(raw, &hooks); err != nil {
+		return nil, false
+	}
+	return hooks, true
+}
+
+func setClaudeHooks(settings claudeSettings, hooks claudeHooks) error {
+	encoded, err := json.Marshal(hooks)
+	if err != nil {
+		return err
+	}
+	settings["hooks"] = json.RawMessage(encoded)
+	return nil
+}
+
+func isJSONNullOrEmpty(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null"))
 }
 
 func runHooks(args []string, out io.Writer) error {
@@ -347,7 +380,14 @@ func installClaudeHooks(out io.Writer, socketPath string) error {
 		return err
 	}
 	hookCommand := installedHookCommand(socketPath)
-	settings["hooks"] = mergeHooks(settings["hooks"], hookCommand)
+	hooks, _ := claudeHooksFromSettings(settings)
+	merged, err := mergeHooks(hooks, hookCommand)
+	if err != nil {
+		return err
+	}
+	if err := setClaudeHooks(settings, merged); err != nil {
+		return err
+	}
 	if err := writeJSONFile(settingsPath, settings); err != nil {
 		return err
 	}
@@ -365,23 +405,22 @@ func uninstallClaudeHooks(out io.Writer) error {
 	if err := backupFile(settingsPath, "kontext-guard"); err != nil {
 		return err
 	}
-	hooks, ok := settings["hooks"].(map[string]any)
+	hooks, ok := claudeHooksFromSettings(settings)
 	if !ok {
 		fmt.Fprintf(out, "No Claude Code hooks found in %s\n", settingsPath)
 		return nil
 	}
-	for hookName, raw := range hooks {
-		list, ok := raw.([]any)
-		if !ok {
-			continue
-		}
-		filtered := make([]any, 0, len(list))
-		for _, entry := range list {
+	for hookName, entries := range hooks {
+		filtered := make([]json.RawMessage, 0, len(entries))
+		for _, entry := range entries {
 			if !isGuardHookEntry(entry) {
 				filtered = append(filtered, entry)
 			}
 		}
 		hooks[hookName] = filtered
+	}
+	if err := setClaudeHooks(settings, hooks); err != nil {
+		return err
 	}
 	if err := writeJSONFile(settingsPath, settings); err != nil {
 		return err
@@ -390,7 +429,7 @@ func uninstallClaudeHooks(out io.Writer) error {
 	return nil
 }
 
-func readClaudeSettings() (string, map[string]any, error) {
+func readClaudeSettings() (string, claudeSettings, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", nil, err
@@ -400,7 +439,7 @@ func readClaudeSettings() (string, map[string]any, error) {
 		return "", nil, err
 	}
 	settingsPath := filepath.Join(claudeDir, "settings.json")
-	settings := map[string]any{}
+	settings := claudeSettings{}
 	raw, err := os.ReadFile(settingsPath)
 	if err == nil {
 		if err := json.Unmarshal(raw, &settings); err != nil {
@@ -435,18 +474,15 @@ func writeJSONFile(path string, value any) error {
 	return os.WriteFile(path, bytes, 0o644)
 }
 
-func mergeHooks(raw any, hookCommand string) map[string]any {
-	hooks, ok := raw.(map[string]any)
-	if !ok {
-		hooks = map[string]any{}
+func mergeHooks(hooks claudeHooks, hookCommand string) (claudeHooks, error) {
+	if hooks == nil {
+		hooks = claudeHooks{}
 	}
 	for _, hookName := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit"} {
-		var list []any
-		if existing, ok := hooks[hookName].([]any); ok {
-			for _, entry := range existing {
-				if !isGuardHookEntry(entry) {
-					list = append(list, entry)
-				}
+		var list []json.RawMessage
+		for _, entry := range hooks[hookName] {
+			if !isGuardHookEntry(entry) {
+				list = append(list, entry)
 			}
 		}
 		if len(list) == 0 {
@@ -456,26 +492,33 @@ func mergeHooks(raw any, hookCommand string) map[string]any {
 		hooks[hookName] = list
 	}
 	for _, hookName := range []string{"PreToolUse", "PostToolUse"} {
-		var list []any
-		if existing, ok := hooks[hookName].([]any); ok {
-			list = append(list, existing...)
-		}
-		list = append(list, map[string]any{
-			"matcher": "*",
-			"hooks": []any{
-				map[string]any{
-					"type":    "command",
-					"command": hookCommand,
-				},
+		list := append([]json.RawMessage(nil), hooks[hookName]...)
+		entry, err := json.Marshal(claudeHookEntry{
+			Matcher: "*",
+			Hooks: []claudeHookAction{
+				{Type: "command", Command: hookCommand},
 			},
 		})
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, entry)
 		hooks[hookName] = list
 	}
-	return hooks
+	return hooks, nil
 }
 
-func isGuardHookEntry(entry any) bool {
-	return isGuardHookCommand(fmt.Sprintf("%v", entry))
+func isGuardHookEntry(entry json.RawMessage) bool {
+	var asString string
+	if err := json.Unmarshal(entry, &asString); err == nil {
+		return isGuardHookCommand(asString)
+	}
+	for _, command := range hookCommands(entry) {
+		if isGuardHookCommand(command) {
+			return true
+		}
+	}
+	return isGuardHookCommand(string(entry))
 }
 
 func isGuardHookCommand(command string) bool {
