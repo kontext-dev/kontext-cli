@@ -77,8 +77,16 @@ func Start(ctx context.Context, opts Options) error {
 	client := backend.NewClient(backend.BaseURL(), tokenManager.Token)
 
 	// 3. Create session via ConnectRPC
-	hostname, _ := os.Hostname()
-	cwd, _ := os.Getwd()
+	hostname, err := os.Hostname()
+	if err != nil {
+		diagnostics.Printf("start: determine hostname: %v\n", err)
+		hostname = ""
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		diagnostics.Printf("start: determine cwd: %v\n", err)
+		cwd = ""
+	}
 	createResp, err := client.CreateSession(ctx, &agentv1.CreateSessionRequest{
 		UserId:   identityKey,
 		Agent:    opts.Agent,
@@ -98,7 +106,9 @@ func Start(ctx context.Context, opts Options) error {
 	defer func() {
 		endManagedSession(client, sessionID, os.Stderr)
 		if sessionDir != "" {
-			os.RemoveAll(sessionDir)
+			if err := os.RemoveAll(sessionDir); err != nil {
+				diagnostics.Printf("start: remove session dir: %v\n", err)
+			}
 		}
 	}()
 
@@ -225,7 +235,9 @@ func Start(ctx context.Context, opts Options) error {
 		return fmt.Errorf("open runtime session: %w", err)
 	}
 	defer func() {
-		_ = sc.RuntimeCore().CloseSession(context.Background(), sessionID)
+		if err := sc.RuntimeCore().CloseSession(context.Background(), sessionID); err != nil {
+			diagnostics.Printf("start: close runtime session: %v\n", err)
+		}
 	}()
 
 	runtimeService, err := localruntime.NewService(localruntime.Options{
@@ -246,7 +258,10 @@ func Start(ctx context.Context, opts Options) error {
 	defer runtimeService.Stop()
 
 	// 7. Generate hook settings
-	kontextBin, _ := os.Executable()
+	kontextBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve kontext binary: %w", err)
+	}
 	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
 	if err != nil {
 		return fmt.Errorf("generate settings: %w", err)
@@ -293,7 +308,10 @@ func endManagedSession(client sessionEnder, sessionID string, out io.Writer) {
 	endCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_ = client.EndSession(endCtx, sessionID)
+	if err := client.EndSession(endCtx, sessionID); err != nil {
+		fmt.Fprintf(out, "\n! Failed to end session (%s): %v\n", truncateID(sessionID), err)
+		return
+	}
 	fmt.Fprintf(out, "\n✓ Session ended (%s)\n", truncateID(sessionID))
 }
 
@@ -1106,7 +1124,9 @@ func launchAgentWithSettings(_ context.Context, agentName, binaryPath string, en
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		for sig := range sigCh {
-			_ = cmd.Process.Signal(sig)
+			if err := cmd.Process.Signal(sig); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				fmt.Fprintf(os.Stderr, "signal %s: %v\n", agentName, err)
+			}
 		}
 	}()
 

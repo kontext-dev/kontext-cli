@@ -2,6 +2,7 @@ package localruntime
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/hook"
@@ -131,7 +132,7 @@ func TestResultFromEvaluateResultNormalizesLegacyDecision(t *testing.T) {
 
 	result := ResultFromEvaluateResult(EvaluateResult{
 		Decision:  "DENY",
-		Allowed:   true,
+		Allowed:   false,
 		Reason:    "blocked",
 		RequestID: "req-123",
 	})
@@ -144,7 +145,7 @@ func TestResultFromEvaluateResultNormalizesLegacyDecision(t *testing.T) {
 	}
 }
 
-func TestResultFromEvaluateResultFallsBackToAllowedFlag(t *testing.T) {
+func TestResultFromEvaluateResultRejectsInvalidDecision(t *testing.T) {
 	t.Parallel()
 
 	result := ResultFromEvaluateResult(EvaluateResult{
@@ -153,7 +154,27 @@ func TestResultFromEvaluateResultFallsBackToAllowedFlag(t *testing.T) {
 		Reason:   "legacy allow",
 	})
 
-	if result.Decision != hook.DecisionAllow {
-		t.Fatalf("decision = %q, want allow", result.Decision)
+	if result.Decision != hook.DecisionDeny {
+		t.Fatalf("decision = %q, want deny", result.Decision)
+	}
+	if !strings.Contains(result.Reason, "invalid local runtime decision") {
+		t.Fatalf("reason = %q, want invalid local runtime decision", result.Reason)
+	}
+}
+
+func TestResultFromEvaluateResultRejectsAllowedMismatch(t *testing.T) {
+	t.Parallel()
+
+	result := ResultFromEvaluateResult(EvaluateResult{
+		Decision: "allow",
+		Allowed:  false,
+		Reason:   "contradiction",
+	})
+
+	if result.Decision != hook.DecisionDeny {
+		t.Fatalf("decision = %q, want deny", result.Decision)
+	}
+	if !strings.Contains(result.Reason, "decision/allowed mismatch") {
+		t.Fatalf("reason = %q, want decision/allowed mismatch", result.Reason)
 	}
 }

@@ -102,7 +102,21 @@ func EvaluateResultFromResult(result hook.Result) EvaluateResult {
 func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 	decision, ok := hook.NormalizeDecision(result.Decision)
 	if !ok {
-		decision = resultFromBool(result.Allowed).Decision
+		return hook.Result{
+			Decision: hook.DecisionDeny,
+			Reason:   fmt.Sprintf("invalid local runtime decision %q", result.Decision),
+		}
+	}
+	allowedByDecision := decision == hook.DecisionAllow
+	if result.Allowed != allowedByDecision {
+		return hook.Result{
+			Decision: hook.DecisionDeny,
+			Reason: fmt.Sprintf(
+				"local runtime decision/allowed mismatch: decision=%q allowed=%t",
+				result.Decision,
+				result.Allowed,
+			),
+		}
 	}
 	return hook.Result{
 		Decision:     decision,
@@ -113,13 +127,6 @@ func ResultFromEvaluateResult(result EvaluateResult) hook.Result {
 		Epoch:        result.Epoch,
 		UpdatedInput: result.UpdatedInput,
 	}
-}
-
-func resultFromBool(allowed bool) hook.Result {
-	if allowed {
-		return hook.Result{Decision: hook.DecisionAllow}
-	}
-	return hook.Result{Decision: hook.DecisionDeny}
 }
 
 func marshalMap(value map[string]any) (json.RawMessage, error) {

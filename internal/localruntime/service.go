@@ -3,6 +3,7 @@ package localruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"time"
@@ -57,7 +58,9 @@ func NewService(opts Options) (*Service, error) {
 func (s *Service) SocketPath() string { return s.socketPath }
 
 func (s *Service) Start(ctx context.Context) error {
-	os.Remove(s.socketPath)
+	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale socket: %w", err)
+	}
 	ln, err := net.Listen("unix", s.socketPath)
 	if err != nil {
 		return err
@@ -74,9 +77,13 @@ func (s *Service) Stop() {
 		s.cancel()
 	}
 	if s.listener != nil {
-		s.listener.Close()
+		if err := s.listener.Close(); err != nil {
+			s.diagnostic.Printf("local runtime close listener: %v\n", err)
+		}
 	}
-	os.Remove(s.socketPath)
+	if err := os.Remove(s.socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.diagnostic.Printf("local runtime remove socket: %v\n", err)
+	}
 }
 
 func (s *Service) acceptLoop(ctx context.Context) {
