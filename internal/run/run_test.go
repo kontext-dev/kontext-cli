@@ -1189,6 +1189,48 @@ func TestGenerateSettingsWritesClaudeHooks(t *testing.T) {
 	}
 }
 
+func TestGenerateLocalSettingsWritesSocketHooks(t *testing.T) {
+	t.Parallel()
+
+	sessionDir := t.TempDir()
+	settingsPath, err := GenerateLocalSettings(sessionDir, "/usr/local/bin/kontext", "claude", "/tmp/kontext.sock", "observe")
+	if err != nil {
+		t.Fatalf("GenerateLocalSettings() error = %v", err)
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var settings claudeSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	wantEvents := []string{"PreToolUse", "PostToolUse"}
+	wantCommand := `'/usr/local/bin/kontext' hook --agent 'claude' --mode 'observe' --socket '/tmp/kontext.sock'`
+	for _, event := range wantEvents {
+		groups, ok := settings.Hooks[event]
+		if !ok {
+			t.Fatalf("settings.Hooks missing %q", event)
+		}
+		if len(groups) != 1 {
+			t.Fatalf("%s groups len = %d, want 1", event, len(groups))
+		}
+		if len(groups[0].Hooks) != 1 {
+			t.Fatalf("%s hooks len = %d, want 1", event, len(groups[0].Hooks))
+		}
+		hook := groups[0].Hooks[0]
+		if hook.Command != wantCommand {
+			t.Fatalf("%s hook command = %q, want %q", event, hook.Command, wantCommand)
+		}
+		if hook.Timeout != 10 {
+			t.Fatalf("%s hook timeout = %d, want 10", event, hook.Timeout)
+		}
+	}
+}
+
 func TestVerifyBlockingHookSettingsRequiresPreToolUseCommand(t *testing.T) {
 	t.Parallel()
 

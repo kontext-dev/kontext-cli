@@ -37,6 +37,38 @@ func TestActivateFromFilePersistsActiveSnapshot(t *testing.T) {
 	}
 }
 
+func TestActivateBytesPersistsPrivateSnapshot(t *testing.T) {
+	source := writeModel(t, t.TempDir(), "model.json", "v1")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	store := New(root)
+
+	snapshot, err := store.ActivateBytes("embedded:test-model", data)
+	if err != nil {
+		t.Fatalf("ActivateBytes() error = %v", err)
+	}
+	if snapshot.SourcePath != "embedded:test-model" {
+		t.Fatalf("SourcePath = %q, want embedded source", snapshot.SourcePath)
+	}
+	for _, path := range []string{snapshot.Path, store.activePath(), store.snapshotMetadataPath(snapshot.ID)} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat(%s) error = %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("%s mode = %o, want 600", path, got)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(root, "snapshots")); err != nil {
+		t.Fatalf("snapshot dir stat error = %v", err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("snapshot dir mode = %o, want 700", got)
+	}
+}
+
 func TestActivateFromFileReusesActiveSnapshotForSameModel(t *testing.T) {
 	source := writeModel(t, t.TempDir(), "model.json", "v1")
 	store := New(t.TempDir())

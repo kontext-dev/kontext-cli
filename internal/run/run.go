@@ -46,10 +46,15 @@ type Options struct {
 	Args         []string
 }
 
-// Start is the main entry point for `kontext start`.
+// Start preserves the historical managed-session entry point.
 func Start(ctx context.Context, opts Options) error {
+	return StartManaged(ctx, opts)
+}
+
+// StartManaged launches an agent with a hosted managed Kontext session.
+func StartManaged(ctx context.Context, opts Options) error {
 	diagnostics := diagnostic.New(os.Stderr, opts.Verbose || diagnostic.EnabledFromEnv())
-	diagnostics.Printf("start: agent=%s env_template=%s\n", opts.Agent, opts.TemplateFile)
+	diagnostics.Printf("start managed: agent=%s env_template=%s\n", opts.Agent, opts.TemplateFile)
 
 	agentPath, err := preflightAgent(opts.Agent)
 	if err != nil {
@@ -246,7 +251,10 @@ func Start(ctx context.Context, opts Options) error {
 	defer runtimeService.Stop()
 
 	// 7. Generate hook settings
-	kontextBin, _ := os.Executable()
+	kontextBin, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve kontext executable: %w", err)
+	}
 	settingsPath, err := GenerateSettings(sessionDir, kontextBin, opts.Agent)
 	if err != nil {
 		return fmt.Errorf("generate settings: %w", err)

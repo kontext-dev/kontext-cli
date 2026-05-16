@@ -73,6 +73,55 @@ func TestServiceCanAckTelemetryBeforeAsyncIngest(t *testing.T) {
 	}
 }
 
+func TestServiceShutdownDrainsAsyncIngest(t *testing.T) {
+	t.Parallel()
+
+	runtime := &stubRuntime{
+		ingestStarted: make(chan struct{}),
+		releaseIngest: make(chan struct{}),
+	}
+	service := newTestService(t, runtime, true)
+	client := NewClient(service.SocketPath())
+
+	result, err := client.Process(context.Background(), hook.Event{
+		SessionID: "agent-session",
+		HookName:  hook.HookPostToolUse,
+		ToolName:  "Bash",
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("Process().Decision = %q, want allow", result.Decision)
+	}
+
+	select {
+	case <-runtime.ingestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("async ingest did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.Shutdown(context.Background())
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("Shutdown() returned before async ingest drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(runtime.releaseIngest)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown() did not return after async ingest completed")
+	}
+}
+
 func TestServiceUsesCustomFailureResult(t *testing.T) {
 	t.Parallel()
 
@@ -191,8 +240,11 @@ type stubRuntime struct {
 	evaluateResult hook.Result
 	evaluateErr    error
 	ingested       chan hook.Event
+	ingestStarted  chan struct{}
+	releaseIngest  chan struct{}
 	evaluateCalls  atomic.Int32
 	ingestCalls    atomic.Int32
+	startedIngest  atomic.Bool
 }
 
 func (s *stubRuntime) EvaluateHook(_ context.Context, _ hook.Event) (hook.Result, error) {
@@ -200,8 +252,18 @@ func (s *stubRuntime) EvaluateHook(_ context.Context, _ hook.Event) (hook.Result
 	return s.evaluateResult, s.evaluateErr
 }
 
-func (s *stubRuntime) IngestEvent(_ context.Context, event hook.Event) (hook.Result, error) {
+func (s *stubRuntime) IngestEvent(ctx context.Context, event hook.Event) (hook.Result, error) {
 	s.ingestCalls.Add(1)
+	if s.ingestStarted != nil && s.startedIngest.CompareAndSwap(false, true) {
+		close(s.ingestStarted)
+	}
+	if s.releaseIngest != nil {
+		select {
+		case <-s.releaseIngest:
+		case <-ctx.Done():
+			return hook.Result{}, ctx.Err()
+		}
+	}
 	if s.ingested != nil {
 		s.ingested <- event
 	}
