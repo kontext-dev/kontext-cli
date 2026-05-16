@@ -113,13 +113,15 @@ func TestStartLlamaServerEarlyExitDoesNotWaitForStopTimeout(t *testing.T) {
 		BinaryPath:     binaryPath,
 		ModelPath:      modelPath,
 		Port:           freeTCPPort(t),
-		StartupTimeout: 2 * time.Second,
+		// Keep this comfortably above our assertion so the test proves we don't
+		// wait for the startup timeout when the process exits immediately.
+		StartupTimeout: 10 * time.Second,
 	})
 	if err == nil {
 		t.Fatal("StartLlamaServer() error = nil, want early exit error")
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("early exit took %s, want less than 1s", elapsed)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("early exit took %s, want less than 3s", elapsed)
 	}
 }
 
