@@ -44,6 +44,7 @@ func TestOpenAICompatibleJudgeCallsChatCompletions(t *testing.T) {
 	judge, err := NewOpenAICompatibleJudge(HTTPOptions{
 		BaseURL: server.URL,
 		Model:   "qwen3-0.6b-q4",
+		Runtime: "llama-server",
 		Timeout: time.Second,
 	})
 	if err != nil {
@@ -65,7 +66,7 @@ func TestOpenAICompatibleJudgeCallsChatCompletions(t *testing.T) {
 	if request.MaxTokens != 256 {
 		t.Fatalf("max tokens = %d, want 256", request.MaxTokens)
 	}
-	if result.Output.Decision != DecisionAllow || result.Metadata.Model != "qwen3-0.6b-q4" {
+	if result.Output.Decision != DecisionAllow || result.Metadata.Model != "qwen3-0.6b-q4" || result.Metadata.Runtime != "llama-server" {
 		t.Fatalf("result = %+v", result)
 	}
 }
