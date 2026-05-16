@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
 	"github.com/kontext-security/kontext-cli/internal/guard/app/server"
+	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
 	"github.com/kontext-security/kontext-cli/internal/guard/modelsnapshot"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
@@ -91,6 +93,10 @@ func runDaemon(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defaultJudgeTimeout, err := envDuration("KONTEXT_JUDGE_TIMEOUT", judge.DefaultTimeout)
+	if err != nil {
+		return err
+	}
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", envString("KONTEXT_ADDR", server.DefaultAddr), "listen address")
@@ -101,6 +107,9 @@ func runDaemon(args []string, out io.Writer) error {
 	skipHookInstall := fs.Bool("skip-hook-install", false, "skip Claude Code hook install")
 	noOpen := fs.Bool("no-open", false, "do not open the local dashboard")
 	socketPath := fs.String("socket", defaultGuardSocketPath(), "Unix socket path for local hook runtime")
+	judgeURL := fs.String("judge-url", envString("KONTEXT_JUDGE_URL", ""), "OpenAI-compatible local judge base URL, for example http://127.0.0.1:8080")
+	judgeModel := fs.String("judge-model", envString("KONTEXT_JUDGE_MODEL", ""), "local judge model name")
+	judgeTimeout := fs.Duration("judge-timeout", defaultJudgeTimeout, "local judge timeout")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -126,7 +135,27 @@ func runDaemon(args []string, out io.Writer) error {
 		}
 		scorer = loaded
 	}
-	localServer, closeStore, err := server.OpenDefaultServer(*dbPath, scorer)
+	var localJudge judge.Judge
+	if strings.TrimSpace(*judgeURL) != "" || strings.TrimSpace(*judgeModel) != "" {
+		if strings.TrimSpace(*judgeURL) == "" || strings.TrimSpace(*judgeModel) == "" {
+			return fmt.Errorf("--judge-url and --judge-model must be set together")
+		}
+		if err := validateLocalJudgeURL(*judgeURL); err != nil {
+			return err
+		}
+		localJudge, err = judge.NewOpenAICompatibleJudge(judge.HTTPOptions{
+			BaseURL: *judgeURL,
+			Model:   *judgeModel,
+			Timeout: *judgeTimeout,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	localServer, closeStore, err := server.OpenDefaultServerWithOptions(*dbPath, server.Options{
+		Scorer: scorer,
+		Judge:  localJudge,
+	})
 	if err != nil {
 		return err
 	}
@@ -155,6 +184,11 @@ func runDaemon(args []string, out io.Writer) error {
 	fmt.Fprintln(out, "Mode: observe (Claude Code runs normally; decisions are recorded as would allow / would ask / would deny).")
 	fmt.Fprintf(out, "Dashboard: http://%s\n", *addr)
 	fmt.Fprintf(out, "Risk model: %s\n", activeModelPath)
+	if localJudge != nil {
+		fmt.Fprintf(out, "Local judge: %s at %s\n", *judgeModel, *judgeURL)
+	} else {
+		fmt.Fprintln(out, "Local judge: disabled")
+	}
 	if !*noOpen {
 		_ = browser.OpenURL("http://" + *addr)
 	}
@@ -661,6 +695,33 @@ func envFloat(key string, fallback float64) (float64, error) {
 		return parsed, nil
 	}
 	return fallback, nil
+}
+
+func envDuration(key string, fallback time.Duration) (time.Duration, error) {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return 0, fmt.Errorf("%s must be a duration: %w", key, err)
+		}
+		return parsed, nil
+	}
+	return fallback, nil
+}
+
+func validateLocalJudgeURL(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("parse judge URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("judge URL must use http or https")
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return nil
+	default:
+		return fmt.Errorf("judge URL must point to localhost")
+	}
 }
 
 func defaultDBPath() string {

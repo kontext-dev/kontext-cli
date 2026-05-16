@@ -58,6 +58,14 @@ type RiskEvent struct {
 	RiskScore          *float64  `json:"risk_score,omitempty"`
 	Confidence         float64   `json:"confidence,omitempty"`
 	Signals            []string  `json:"signals,omitempty"`
+	DecisionStage      string    `json:"decision_stage,omitempty"`
+	PolicyVersion      string    `json:"policy_version,omitempty"`
+	JudgeRuntime       string    `json:"judge_runtime,omitempty"`
+	JudgeModel         string    `json:"judge_model,omitempty"`
+	JudgeDurationMs    *int64    `json:"judge_duration_ms,omitempty"`
+	JudgeFailureKind   string    `json:"judge_failure_kind,omitempty"`
+	JudgeRiskLevel     string    `json:"judge_risk_level,omitempty"`
+	JudgeCategories    []string  `json:"judge_categories,omitempty"`
 }
 
 type RiskDecision struct {

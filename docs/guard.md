@@ -47,7 +47,7 @@ Claude Code
   -> local runtime Unix socket
   -> RuntimeCore
   -> deterministic risk rules
-  -> Markov-chain risk model
+  -> optional local LLM judge or Markov-chain risk model
   -> local SQLite
   -> local dashboard + notifications
 ```
@@ -60,6 +60,20 @@ Guard uses two layers:
 2. A local Markov-chain risk model for sequence context in coding-agent workflows.
 
 The shipped model is a JSON artifact under `models/guard/`. Lab is the private pipeline that ingests datasets and local traces, evaluates candidate models, and produces improved JSON files. Accepted model files are committed back to this repo by PR.
+
+## Local judge
+
+Guard can optionally call a localhost OpenAI-compatible judge, such as `llama-server`, after deterministic rules allow a blocking tool call:
+
+```bash
+kontext guard start \
+  --judge-url http://127.0.0.1:8080 \
+  --judge-model qwen3-0.6b-q4
+```
+
+The judge receives a small redacted JSON input with tool metadata, normalized risk fields, deterministic policy context, and no full conversation history. It must return structured JSON with `decision` set to `allow` or `deny`. `ask` is not part of the judge contract.
+
+Judge failures are fail-open for launch. If the local runtime is unavailable, times out, or returns invalid JSON, Guard records `judge_unavailable_allow` plus high-level metadata and allows the tool call. Judge URLs must point at localhost.
 
 ## Public/private boundary
 

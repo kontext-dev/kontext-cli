@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-var credentialShape = regexp.MustCompile(`(?i)(authorization\s*:|bearer\s+[a-z0-9._~+/=-]+|api[_-]?key\s*[=:]|secret\s*[=:]|token\s*[=:])`)
+var credentialAssignment = regexp.MustCompile(`(?i)\b([a-z0-9_]*(?:api[_-]?key|token|secret|access[_-]?key)[a-z0-9_]*|api[_-]?key|token|secret)\s*=\s*("[^"]*"|'[^']*'|[^\s;&|]+)`)
+var credentialHeader = regexp.MustCompile(`(?i)(authorization\s*:\s*)(bearer\s+)?("[^"]*"|'[^']*'|[^\s;&|]+)`)
+var credentialBearer = regexp.MustCompile(`(?i)\bbearer\s+("[^"]*"|'[^']*'|[a-z0-9._~+/=-]+)`)
+var credentialShape = regexp.MustCompile(`(?i)(authorization\s*:|api[_-]?key\s*[=:]|secret\s*[=:]|token\s*[=:])`)
 var credentialReference = regexp.MustCompile(`(?i)(authorization\s*:|bearer\s+[a-z0-9._~+/=-]+|api[_-]?key\s*[=:]|secret\s*[=:]|token\s*[=:]|\$[A-Z0-9_]*(TOKEN|SECRET|API_KEY|ACCESS_KEY)[A-Z0-9_]*)`)
 var destructiveWord = regexp.MustCompile(`(?i)\b(delete|destroy|drop|truncate|wipe)\b`)
 var resourceWord = regexp.MustCompile(`(?i)\b(database|volume|backup|bucket|project|repo|repository|branch|deployment|namespace|secret)\b`)
@@ -279,6 +282,9 @@ func summarizeRequest(toolName, path, command string) string {
 }
 
 func redact(value string) string {
+	value = credentialAssignment.ReplaceAllString(value, "$1=[redacted-credential]")
+	value = credentialHeader.ReplaceAllString(value, "${1}${2}[redacted-credential]")
+	value = credentialBearer.ReplaceAllString(value, "Bearer [redacted-credential]")
 	value = credentialShape.ReplaceAllString(value, "[redacted-credential]")
 	if len(value) > 240 {
 		return value[:240] + "..."

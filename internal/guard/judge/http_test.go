@@ -1,0 +1,97 @@
+package judge
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+)
+
+func TestParseOutputValidatesDecisionSchema(t *testing.T) {
+	output, err := ParseOutput(`{"decision":"deny","risk_level":"high","categories":["production_mutation"],"reason":"Deletes production data."}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Decision != DecisionDeny || output.RiskLevel != RiskLevelHigh {
+		t.Fatalf("output = %+v", output)
+	}
+}
+
+func TestParseOutputRejectsAsk(t *testing.T) {
+	_, err := ParseOutput(`{"decision":"ask","risk_level":"medium","categories":["review"],"reason":"Needs review."}`)
+	if err == nil {
+		t.Fatal("ParseOutput() error = nil, want invalid decision")
+	}
+}
+
+func TestOpenAICompatibleJudgeCallsChatCompletions(t *testing.T) {
+	var request openAIChatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"decision\":\"allow\",\"risk_level\":\"low\",\"categories\":[\"normal_coding\"],\"reason\":\"Reads a project file.\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	judge, err := NewOpenAICompatibleJudge(HTTPOptions{
+		BaseURL: server.URL,
+		Model:   "qwen3-0.6b-q4",
+		Timeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := judge.Decide(context.Background(), Input{
+		HookEvent: "PreToolUse",
+		ToolName:  "Read",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != "qwen3-0.6b-q4" || len(request.Messages) != 2 {
+		t.Fatalf("request = %+v", request)
+	}
+	if request.MaxTokens != 256 {
+		t.Fatalf("max tokens = %d, want 256", request.MaxTokens)
+	}
+	if result.Output.Decision != DecisionAllow || result.Metadata.Model != "qwen3-0.6b-q4" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestOpenAICompatibleJudgeClassifiesTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	judge, err := NewOpenAICompatibleJudge(HTTPOptions{
+		BaseURL: server.URL,
+		Model:   "qwen3-0.6b-q4",
+		Timeout: time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = judge.Decide(context.Background(), Input{HookEvent: "PreToolUse"})
+	if FailureKind(err) != FailureTimeout {
+		t.Fatalf("FailureKind(err) = %q, err=%v", FailureKind(err), err)
+	}
+}
+
+func TestChatCompletionsEndpointAcceptsV1Base(t *testing.T) {
+	endpoint, err := chatCompletionsEndpoint("http://127.0.0.1:8080/v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "http://127.0.0.1:8080/v1/chat/completions" {
+		t.Fatalf("endpoint = %q", endpoint)
+	}
+}

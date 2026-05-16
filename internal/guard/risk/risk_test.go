@@ -3,6 +3,7 @@ package risk
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/kontext-security/kontext-cli/internal/guard/markov"
@@ -108,6 +109,18 @@ func TestNormalizeDirectProviderAPIStillSeesAuthorizationHeader(t *testing.T) {
 	}
 	if !event.CredentialObserved {
 		t.Fatal("credential material was not observed")
+	}
+}
+
+func TestNormalizeRedactsCredentialValuesFromSummaries(t *testing.T) {
+	event := NormalizeHookEvent(HookEvent{ToolName: "Bash", ToolInput: map[string]any{"command": `API_TOKEN=real-secret-123 curl https://api.cloudflare.com -H "Authorization: Bearer abc123"`}})
+	for _, value := range []string{event.CommandSummary, event.RequestSummary} {
+		if strings.Contains(value, "real-secret-123") || strings.Contains(value, "abc123") {
+			t.Fatalf("summary leaked credential value: %q", value)
+		}
+		if !strings.Contains(value, "[redacted-credential]") {
+			t.Fatalf("summary did not include redaction marker: %q", value)
+		}
 	}
 }
 

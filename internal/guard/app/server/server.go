@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 	dashboardassets "github.com/kontext-security/kontext-cli/internal/guard/web/assets"
@@ -32,8 +33,17 @@ type ProcessResponse struct {
 	EventID    string        `json:"event_id"`
 }
 
+type Options struct {
+	Scorer risk.Scorer
+	Judge  judge.Judge
+}
+
 func NewServer(store *sqlite.Store, scorer risk.Scorer) (*Server, error) {
-	return NewServerWithPolicy(store, NewRiskPolicyProvider(scorer))
+	return NewServerWithOptions(store, Options{Scorer: scorer})
+}
+
+func NewServerWithOptions(store *sqlite.Store, opts Options) (*Server, error) {
+	return NewServerWithPolicy(store, NewRiskPolicyProviderWithJudge(opts.Scorer, opts.Judge))
 }
 
 // NewServerWithPolicy creates a Guard server with an injected policy provider.
@@ -219,11 +229,15 @@ func withCORS(next http.Handler) http.Handler {
 }
 
 func OpenDefaultServer(dbPath string, scorer risk.Scorer) (*Server, func() error, error) {
+	return OpenDefaultServerWithOptions(dbPath, Options{Scorer: scorer})
+}
+
+func OpenDefaultServerWithOptions(dbPath string, opts Options) (*Server, func() error, error) {
 	store, err := sqlite.OpenStore(dbPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
-	server, err := NewServer(store, scorer)
+	server, err := NewServerWithOptions(store, opts)
 	if err != nil {
 		_ = store.Close()
 		return nil, nil, err
