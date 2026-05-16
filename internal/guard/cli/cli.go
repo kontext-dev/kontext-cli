@@ -58,6 +58,8 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return runTraces(ctx, args[1:], stdout)
 	case "model":
 		return runModel(args[1:], stdout)
+	case "judge":
+		return runJudge(ctx, args[1:], stdout)
 	case "smoke-test":
 		return runSmokeTest(ctx, args[1:], stdout)
 	case "help", "-h", "--help":
@@ -82,6 +84,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  traces inspect                Inspect local trace summary")
 	fmt.Fprintln(out, "  model info                    Print baseline model info")
 	fmt.Fprintln(out, "  model train                   Train a local fixture model")
+	fmt.Fprintln(out, "  judge eval                    Evaluate local judge fixtures")
 }
 
 func runDaemon(args []string, out io.Writer) error {
@@ -615,6 +618,89 @@ func runModel(args []string, out io.Writer) error {
 	default:
 		return fmt.Errorf("usage: kontext guard model info|train")
 	}
+}
+
+func runJudge(ctx context.Context, args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kontext guard judge eval")
+	}
+	switch args[0] {
+	case "eval":
+		return runJudgeEval(ctx, args[1:], out)
+	default:
+		return fmt.Errorf("usage: kontext guard judge eval")
+	}
+}
+
+func runJudgeEval(ctx context.Context, args []string, out io.Writer) error {
+	defaultJudgeTimeout, err := envDuration("KONTEXT_JUDGE_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return err
+	}
+	fs := flag.NewFlagSet("judge eval", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	judgeURL := fs.String("judge-url", envString("KONTEXT_JUDGE_URL", ""), "OpenAI-compatible local judge base URL")
+	judgeModel := fs.String("judge-model", envString("KONTEXT_JUDGE_MODEL", ""), "local judge model name")
+	judgeTimeout := fs.Duration("judge-timeout", defaultJudgeTimeout, "local judge timeout")
+	fixturesPath := fs.String("fixtures", "internal/guard/judge/testdata/launch-v0.jsonl", "judge evaluation JSONL fixtures")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*judgeURL) == "" || strings.TrimSpace(*judgeModel) == "" {
+		return fmt.Errorf("--judge-url and --judge-model are required")
+	}
+	if err := validateLocalJudgeURL(*judgeURL); err != nil {
+		return err
+	}
+	localJudge, err := judge.NewOpenAICompatibleJudge(judge.HTTPOptions{
+		BaseURL: *judgeURL,
+		Model:   *judgeModel,
+		Timeout: *judgeTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	fixtures, err := readJudgeEvalFixtures(*fixturesPath)
+	if err != nil {
+		return err
+	}
+	total := 0
+	passed := 0
+	for _, fixture := range fixtures {
+		if !fixture.JudgeExpected.ShouldCallJudge {
+			continue
+		}
+		total++
+		result, err := localJudge.Decide(ctx, judge.InputFromFixture(fixture))
+		if err != nil {
+			fmt.Fprintf(out, "FAIL %s: judge error: %v\n", fixture.ID, err)
+			continue
+		}
+		if failures := judge.CompareFixtureOutput(result.Output, fixture.JudgeExpected); len(failures) > 0 {
+			fmt.Fprintf(out, "FAIL %s: %s reason=%q\n", fixture.ID, strings.Join(failures, "; "), result.Output.Reason)
+			continue
+		}
+		passed++
+		fmt.Fprintf(out, "PASS %s: %s %s\n", fixture.ID, result.Output.Decision, result.Output.RiskLevel)
+	}
+	fmt.Fprintf(out, "summary passed=%d failed=%d total=%d\n", passed, total-passed, total)
+	if passed != total {
+		return fmt.Errorf("judge eval failed %d of %d fixtures", total-passed, total)
+	}
+	return nil
+}
+
+func readJudgeEvalFixtures(path string) ([]judge.Fixture, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	fixtures, err := judge.ReadFixtures(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return fixtures, nil
 }
 
 func modelInfo(path string) (string, error) {
