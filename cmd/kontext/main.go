@@ -27,6 +27,11 @@ import (
 
 var version = "dev"
 
+var (
+	startLocal   = run.StartLocal
+	startManaged = run.StartManaged
+)
+
 func main() {
 	root := &cobra.Command{
 		Use:     "kontext",
@@ -73,12 +78,19 @@ func startCmd() *cobra.Command {
 	var (
 		agentName    string
 		templateFile string
+		managed      bool
 		verbose      bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "start [flags] [-- extra-agent-args...]",
-		Short: "Launch an agent with Kontext governance",
+		Short: "Launch an agent with Kontext runtime security",
+		Long: "Launch an agent with Kontext runtime security.\n\n" +
+			"By default, this starts a local-only runtime with no hosted login. " +
+			"Use --managed when you need hosted credentials, shared traces, and team governance.",
+		Example: "  kontext start\n" +
+			"  KONTEXT_MODE=enforce kontext start\n" +
+			"  kontext start --managed",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isInteractivePrompt() {
 				if latest := update.Available(version); latest != "" {
@@ -90,15 +102,24 @@ func startCmd() *cobra.Command {
 			} else {
 				update.CheckAsync(version)
 			}
+			if !managed && cmd.Flags().Changed("env-template") {
+				return errors.New("--env-template is only used with --managed sessions")
+			}
 			ctx := context.Background()
-			err := run.Start(ctx, run.Options{
+			opts := run.Options{
 				Agent:        agentName,
 				TemplateFile: templateFile,
 				IssuerURL:    auth.DefaultIssuerURL,
 				ClientID:     auth.DefaultClientID,
 				Verbose:      verbose,
 				Args:         args,
-			})
+			}
+			var err error
+			if managed {
+				err = startManaged(ctx, opts)
+			} else {
+				err = startLocal(ctx, opts)
+			}
 			if exitErr, ok := err.(*run.AgentExitError); ok {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", exitErr)
 				os.Exit(exitErr.ExitCode())
@@ -108,7 +129,8 @@ func startCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent to launch (currently: claude)")
-	cmd.Flags().StringVar(&templateFile, "env-template", ".env.kontext", "Path to env template file")
+	cmd.Flags().StringVar(&templateFile, "env-template", ".env.kontext", "Path to env template file for --managed sessions")
+	cmd.Flags().BoolVar(&managed, "managed", false, "Launch with hosted managed credentials and shared traces")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Show redacted diagnostic output")
 
 	return cmd
@@ -205,7 +227,7 @@ func hookCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&agentName, "agent", "claude", "Agent type")
 	cmd.Flags().StringVar(&socketPath, "socket", "", "Unix socket path for local hook runtime")
-	cmd.Flags().StringVar(&mode, "mode", os.Getenv("KONTEXT_MODE"), "hook mode: observe or enforce")
+	cmd.Flags().StringVar(&mode, "mode", "", "hook mode: observe or enforce")
 
 	return cmd
 }
@@ -275,7 +297,10 @@ func sidecarFailureResult(event hook.Event, reason, mode string) hook.Result {
 	if event.HookName != hook.HookPreToolUse {
 		return hook.Result{Decision: hook.DecisionAllow, Reason: reason}
 	}
-	if normalizedHookMode(mode) == "enforce" {
+	if hookMode := normalizedHookMode(mode); hookMode != "" {
+		if hookMode != "enforce" {
+			return hook.Result{Decision: hook.DecisionAllow, Reason: reason, Mode: hookMode}
+		}
 		return hook.Result{Decision: hook.DecisionDeny, Reason: reason, Mode: "enforce"}
 	}
 	if currentHostedAccessMode() == "enforce" {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/hook"
+	"github.com/kontext-security/kontext-cli/internal/run"
 	"github.com/zalando/go-keyring"
 )
 
@@ -40,6 +42,98 @@ func TestStartCmdHasVerboseFlag(t *testing.T) {
 	}
 }
 
+func TestStartCmdHasManagedFlag(t *testing.T) {
+	cmd := startCmd()
+	flag := cmd.Flags().Lookup("managed")
+	if flag == nil {
+		t.Fatal("start command missing --managed flag")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--managed default = %q, want false", flag.DefValue)
+	}
+}
+
+func TestStartCmdDefaultsToLocalStart(t *testing.T) {
+	oldLocal := startLocal
+	oldManaged := startManaged
+	defer func() {
+		startLocal = oldLocal
+		startManaged = oldManaged
+	}()
+
+	called := ""
+	startLocal = func(_ context.Context, opts run.Options) error {
+		called = "local"
+		if opts.Agent != "claude" {
+			t.Fatalf("Agent = %q, want claude", opts.Agent)
+		}
+		return nil
+	}
+	startManaged = func(context.Context, run.Options) error {
+		t.Fatal("managed start should not be called")
+		return nil
+	}
+
+	cmd := startCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v", err)
+	}
+	if called != "local" {
+		t.Fatalf("called = %q, want local", called)
+	}
+}
+
+func TestStartCmdManagedFlagRoutesToHostedStart(t *testing.T) {
+	oldLocal := startLocal
+	oldManaged := startManaged
+	defer func() {
+		startLocal = oldLocal
+		startManaged = oldManaged
+	}()
+
+	called := ""
+	startLocal = func(context.Context, run.Options) error {
+		t.Fatal("local start should not be called")
+		return nil
+	}
+	startManaged = func(_ context.Context, opts run.Options) error {
+		called = "managed"
+		if opts.TemplateFile != "custom.env" {
+			t.Fatalf("TemplateFile = %q, want custom.env", opts.TemplateFile)
+		}
+		return nil
+	}
+
+	cmd := startCmd()
+	if err := cmd.Flags().Set("managed", "true"); err != nil {
+		t.Fatalf("Set managed error = %v", err)
+	}
+	if err := cmd.Flags().Set("env-template", "custom.env"); err != nil {
+		t.Fatalf("Set env-template error = %v", err)
+	}
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("RunE() error = %v", err)
+	}
+	if called != "managed" {
+		t.Fatalf("called = %q, want managed", called)
+	}
+}
+
+func TestStartCmdRejectsEnvTemplateWithoutManaged(t *testing.T) {
+	cmd := startCmd()
+	if err := cmd.Flags().Set("env-template", "custom.env"); err != nil {
+		t.Fatalf("Set env-template error = %v", err)
+	}
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("RunE() error = nil, want --env-template error")
+	}
+	if !strings.Contains(err.Error(), "--env-template is only used with --managed") {
+		t.Fatalf("error = %q, want env-template managed error", err.Error())
+	}
+}
+
 func TestGuardCmdRoutesToLocalGuardMode(t *testing.T) {
 	cmd := guardCmd()
 	if cmd.Use != "guard" {
@@ -47,6 +141,19 @@ func TestGuardCmdRoutesToLocalGuardMode(t *testing.T) {
 	}
 	if !cmd.DisableFlagParsing {
 		t.Fatal("guard command should pass flags through to the local Guard command parser")
+	}
+}
+
+func TestHookCmdModeDoesNotDefaultFromEnv(t *testing.T) {
+	t.Setenv("KONTEXT_MODE", "observe")
+
+	cmd := hookCmd()
+	flag := cmd.Flags().Lookup("mode")
+	if flag == nil {
+		t.Fatal("hook command missing --mode flag")
+	}
+	if flag.DefValue != "" {
+		t.Fatalf("--mode default = %q, want empty", flag.DefValue)
 	}
 }
 
@@ -144,6 +251,26 @@ func TestEvaluateViaSidecarFailsClosedWhenEnforceSidecarUnavailable(t *testing.T
 	}
 	if result.Mode != "enforce" {
 		t.Fatalf("mode = %q, want enforce", result.Mode)
+	}
+}
+
+func TestEvaluateViaSidecarObserveModeIgnoresStaleHostedEnforce(t *testing.T) {
+	t.Setenv("KONTEXT_ACCESS_MODE", "enforce")
+
+	socketPath := fmt.Sprintf("/tmp/kontext-missing-%d.sock", time.Now().UnixNano())
+	result, err := evaluateViaSidecarForMode(socketPath, hook.Event{
+		Agent:    "claude",
+		HookName: hook.HookPreToolUse,
+		ToolName: "Bash",
+	}, "observe")
+	if err != nil {
+		t.Fatalf("evaluateViaSidecarForMode() error = %v", err)
+	}
+	if result.Decision != hook.DecisionAllow {
+		t.Fatalf("decision = %q, want ALLOW", result.Decision)
+	}
+	if result.Mode != "observe" {
+		t.Fatalf("mode = %q, want observe", result.Mode)
 	}
 }
 

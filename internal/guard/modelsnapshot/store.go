@@ -48,6 +48,20 @@ func (s *Store) ActivateFromFile(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	return s.activate(path, data)
+}
+
+func (s *Store) ActivateBytes(source string, data []byte) (Snapshot, error) {
+	if strings.TrimSpace(source) == "" {
+		return Snapshot{}, fmt.Errorf("model source is required")
+	}
+	if len(data) == 0 {
+		return Snapshot{}, fmt.Errorf("model data is required")
+	}
+	return s.activate(source, data)
+}
+
+func (s *Store) activate(source string, data []byte) (Snapshot, error) {
 	model, err := markov.ReadModelJSON(bytes.NewReader(data))
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("validate model snapshot: %w", err)
@@ -75,16 +89,16 @@ func (s *Store) ActivateFromFile(path string) (Snapshot, error) {
 
 	id := now.Format("20060102T150405.000000000Z") + "-" + hash[:12]
 	snapshotDir := filepath.Join(s.root, "snapshots")
-	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
 		return Snapshot{}, err
 	}
 	modelPath := filepath.Join(snapshotDir, id+".json")
-	if err := writeFileAtomic(modelPath, data, 0o644); err != nil {
+	if err := writeFileAtomic(modelPath, data, 0o600); err != nil {
 		return Snapshot{}, err
 	}
 	snapshot := Snapshot{
 		ID:          id,
-		SourcePath:  path,
+		SourcePath:  source,
 		Path:        modelPath,
 		SHA256:      hash,
 		CreatedAt:   now,
@@ -147,7 +161,7 @@ func (s *Store) writeSnapshot(snapshot Snapshot) error {
 		return err
 	}
 	data = append(data, '\n')
-	return writeFileAtomic(s.snapshotMetadataPath(snapshot.ID), data, 0o644)
+	return writeFileAtomic(s.snapshotMetadataPath(snapshot.ID), data, 0o600)
 }
 
 func (s *Store) readSnapshot(id string) (Snapshot, error) {
@@ -171,7 +185,7 @@ func (s *Store) writeActive(snapshot Snapshot) error {
 		return err
 	}
 	data = append(data, '\n')
-	return writeFileAtomic(s.activePath(), data, 0o644)
+	return writeFileAtomic(s.activePath(), data, 0o600)
 }
 
 func (s *Store) activePath() string {
@@ -183,7 +197,7 @@ func (s *Store) snapshotMetadataPath(id string) string {
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")

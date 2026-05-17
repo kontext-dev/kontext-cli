@@ -38,7 +38,23 @@ func commandHookGroups(command string) []hookGroup {
 // and returns the path to the generated file.
 func GenerateSettings(sessionDir, kontextBinary, agentName string) (string, error) {
 	hookCmd := fmt.Sprintf("%s hook --agent %s", kontextBinary, agentName)
+	return writeClaudeSettings(sessionDir, hookCmd)
+}
 
+// GenerateLocalSettings creates a Claude Code settings.json that connects
+// hooks to the wrapper-owned local runtime socket.
+func GenerateLocalSettings(sessionDir, kontextBinary, agentName, socketPath, mode string) (string, error) {
+	hookCmd := fmt.Sprintf(
+		"%s hook --agent %s --mode %s --socket %s",
+		shellQuote(kontextBinary),
+		shellQuote(agentName),
+		shellQuote(mode),
+		shellQuote(socketPath),
+	)
+	return writeClaudeSettings(sessionDir, hookCmd)
+}
+
+func writeClaudeSettings(sessionDir, hookCmd string) (string, error) {
 	settings := claudeSettings{
 		Hooks: map[string][]hookGroup{
 			"PreToolUse":  commandHookGroups(hookCmd),
@@ -57,6 +73,10 @@ func GenerateSettings(sessionDir, kontextBinary, agentName string) (string, erro
 	}
 
 	return settingsPath, nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func VerifyBlockingHookSettings(settingsPath, kontextBinary, agentName string) error {

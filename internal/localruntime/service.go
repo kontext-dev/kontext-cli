@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/kontext-security/kontext-cli/internal/diagnostic"
@@ -24,6 +25,8 @@ type Service struct {
 	onFailure   func(hook.Event, error) hook.Result
 	diagnostic  diagnostic.Logger
 	cancel      context.CancelFunc
+	serveDone   chan struct{}
+	wg          sync.WaitGroup
 }
 
 type Options struct {
@@ -65,24 +68,62 @@ func (s *Service) Start(ctx context.Context) error {
 	s.listener = ln
 
 	ctx, s.cancel = context.WithCancel(ctx)
-	go s.acceptLoop(ctx)
+	s.serveDone = make(chan struct{})
+	go s.acceptLoop(ctx, ln, s.serveDone)
 	return nil
 }
 
 func (s *Service) Stop() {
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.listener != nil {
-		s.listener.Close()
-	}
-	os.Remove(s.socketPath)
+	_ = s.Shutdown(context.Background())
 }
 
-func (s *Service) acceptLoop(ctx context.Context) {
+func (s *Service) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+	_ = os.Remove(s.socketPath)
+
+	if s.serveDone != nil {
+		select {
+		case <-s.serveDone:
+		case <-ctx.Done():
+			if s.cancel != nil {
+				s.cancel()
+			}
+			return ctx.Err()
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		if s.cancel != nil {
+			s.cancel()
+		}
+		return nil
+	case <-ctx.Done():
+		if s.cancel != nil {
+			s.cancel()
+		}
+		return ctx.Err()
+	}
+}
+
+func (s *Service) acceptLoop(ctx context.Context, listener net.Listener, done chan<- struct{}) {
+	defer close(done)
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -91,7 +132,11 @@ func (s *Service) acceptLoop(ctx context.Context) {
 				return
 			}
 		}
-		go s.handleConn(ctx, conn)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.handleConn(ctx, conn)
+		}()
 	}
 }
 
@@ -115,7 +160,11 @@ func (s *Service) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	if s.asyncIngest && req.HookEvent != hook.HookPreToolUse.String() {
-		go s.ingestEvent(ctx, &req)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.ingestEvent(ctx, &req)
+		}()
 	}
 }
 
