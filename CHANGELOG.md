@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/kontext-security/kontext-cli/compare/v0.6.0...v0.7.0) (2026-05-17)
+
+
+### Features
+
+* add local guard judge contract ([#132](https://github.com/kontext-security/kontext-cli/issues/132)) ([ef6a3cd](https://github.com/kontext-security/kontext-cli/commit/ef6a3cd1c1cfba54e3c4e8c645c27b3c7829a5c3))
+* **cli:** make kontext start local-first ([#140](https://github.com/kontext-security/kontext-cli/issues/140)) ([02a34bf](https://github.com/kontext-security/kontext-cli/commit/02a34bfaf553a7d7dd5adf2fa4fba09168bd7667))
+* manage local judge runtime ([#136](https://github.com/kontext-security/kontext-cli/issues/136)) ([09f4fc0](https://github.com/kontext-security/kontext-cli/commit/09f4fc070146b0ad1924f82b6ac23b26ade079bd))
+* **runtime service:** Guard now starts a Unix-socket localruntime.Service alongside the existing HTTP daemon ([#122](https://github.com/kontext-security/kontext-cli/issues/122)) ([3e87e12](https://github.com/kontext-security/kontext-cli/commit/3e87e12ae91dd9a2546b816b6b1b38b2cc4a8289))
+* **runtime service:** Introduce runtime service and make existing Unix socket more generic ([#121](https://github.com/kontext-security/kontext-cli/issues/121)) ([2bbaa93](https://github.com/kontext-security/kontext-cli/commit/2bbaa933273dd8f7bd39af03849f5c638db1c974))
+
+
+### Bug Fixes
+
+* harden npm dependency resolution ([#114](https://github.com/kontext-security/kontext-cli/issues/114)) ([86eadf5](https://github.com/kontext-security/kontext-cli/commit/86eadf512d35ddb329f53fb9d24a61e561a260db))
+* optimize judge fixture category matching ([#146](https://github.com/kontext-security/kontext-cli/issues/146)) ([0bad7ab](https://github.com/kontext-security/kontext-cli/commit/0bad7ab17c71be2c2ec8b35b39da79a37b0a2410))
+* **repo:** remove repo-wide codeowners ([#133](https://github.com/kontext-security/kontext-cli/issues/133)) ([73557f0](https://github.com/kontext-security/kontext-cli/commit/73557f0dd0b47f1b6da0a69f36eb8168fa981455))
+
 ## [0.6.0](https://github.com/kontext-security/kontext-cli/compare/v0.5.1...v0.6.0) (2026-05-03)
 
 
