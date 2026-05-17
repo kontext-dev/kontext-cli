@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 )
 
@@ -78,8 +77,12 @@ func CompareFixtureOutput(output Output, expected FixtureExpected) []string {
 	if output.RiskLevel != expected.RiskLevel {
 		failures = append(failures, fmt.Sprintf("risk_level=%s want=%s", output.RiskLevel, expected.RiskLevel))
 	}
+	outputCategories := make(map[string]struct{}, len(output.Categories))
+	for _, category := range output.Categories {
+		outputCategories[category] = struct{}{}
+	}
 	for _, category := range expected.Categories {
-		if !slices.Contains(output.Categories, category) {
+		if _, ok := outputCategories[category]; !ok {
 			failures = append(failures, fmt.Sprintf("missing category %q", category))
 		}
 	}
