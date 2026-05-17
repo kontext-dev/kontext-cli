@@ -1,10 +1,13 @@
 package risk
 
+const PolicyVersionLaunchV0 = "guard-launch-v0"
+
 func DecideRisk(event HookEvent, scorer Scorer) (RiskDecision, error) {
 	if scorer == nil {
 		scorer = NoopScorer{}
 	}
 	riskEvent := NormalizeHookEvent(event)
+	riskEvent.PolicyVersion = PolicyVersionLaunchV0
 	score, err := scorer.Score(riskEvent)
 	if err != nil {
 		return RiskDecision{}, err
@@ -14,6 +17,7 @@ func DecideRisk(event HookEvent, scorer Scorer) (RiskDecision, error) {
 	if event.HookEventName != "PreToolUse" {
 		riskEvent.Decision = DecisionAllow
 		riskEvent.ReasonCode = "async_telemetry"
+		riskEvent.DecisionStage = "async_telemetry"
 		return RiskDecision{
 			Decision:     DecisionAllow,
 			Reason:       "async telemetry event recorded",
@@ -50,7 +54,22 @@ func DecideRisk(event HookEvent, scorer Scorer) (RiskDecision, error) {
 	decision.RiskEvent.GuardID = decision.GuardID
 	decision.RiskEvent.RiskScore = decision.RiskScore
 	decision.RiskEvent.ModelVersion = decision.ModelVersion
+	decision.RiskEvent.PolicyVersion = PolicyVersionLaunchV0
+	if decision.RiskEvent.DecisionStage == "" {
+		switch {
+		case decision.ReasonCode == "model_risk_threshold":
+			decision.RiskEvent.DecisionStage = "model"
+		case decision.GuardID != "":
+			decision.RiskEvent.DecisionStage = "deterministic"
+		default:
+			decision.RiskEvent.DecisionStage = "policy_allow"
+		}
+	}
 	return decision, nil
+}
+
+func DeterministicDecision(event RiskEvent) RiskDecision {
+	return guardDecision(event)
 }
 
 func modelCanEscalate(event RiskEvent) bool {

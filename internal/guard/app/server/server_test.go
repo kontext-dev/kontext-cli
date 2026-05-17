@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/kontext-security/kontext-cli/internal/guard/judge"
 	"github.com/kontext-security/kontext-cli/internal/guard/risk"
 	"github.com/kontext-security/kontext-cli/internal/guard/store/sqlite"
 )
@@ -239,6 +241,156 @@ func TestProcessHookEventPreservesRiskMetadata(t *testing.T) {
 	}
 }
 
+func TestJudgePolicyDeniesFromLocalJudge(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	localJudge := &recordingJudge{
+		result: judge.Result{
+			Output: judge.Output{
+				Decision:   judge.DecisionDeny,
+				RiskLevel:  judge.RiskLevelHigh,
+				Categories: []string{"destructive_operation"},
+				Reason:     "Risky operation.",
+			},
+			Metadata: judge.Metadata{
+				Runtime:    "openai-compatible",
+				Model:      "qwen3-0.6b-q4",
+				DurationMs: 12,
+			},
+		},
+	}
+	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		Agent:         "claude",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "python scripts/deploy.py --dry-run"},
+		CWD:           "/tmp/project",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localJudge.calls != 1 {
+		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
+	}
+	if localJudge.input.Agent != "claude" || localJudge.input.CWDClass != "project" {
+		t.Fatalf("judge input = %+v", localJudge.input)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.ReasonCode != "judge_deny" {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if decision.RiskEvent.JudgeModel != "qwen3-0.6b-q4" || decision.RiskEvent.JudgeRiskLevel != "high" {
+		t.Fatalf("risk event = %+v", decision.RiskEvent)
+	}
+}
+
+func TestJudgePolicyRedactsCredentialValuesFromJudgeInput(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	localJudge := &recordingJudge{
+		result: judge.Result{
+			Output: judge.Output{
+				Decision:   judge.DecisionAllow,
+				RiskLevel:  judge.RiskLevelLow,
+				Categories: []string{"normal_coding"},
+				Reason:     "Safe.",
+			},
+			Metadata: judge.Metadata{Runtime: "openai-compatible", Model: "qwen3-0.6b-q4"},
+		},
+	}
+	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		Agent:         "claude",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": `echo API_TOKEN=real-secret-123`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localJudge.calls != 1 {
+		t.Fatalf("judge calls = %d, want 1", localJudge.calls)
+	}
+	got := localJudge.input.ToolInput.CommandRedacted + " " + localJudge.input.ToolInput.RequestSummary + " " + localJudge.input.NormalizedEvent.CommandSummary + " " + localJudge.input.NormalizedEvent.RequestSummary
+	if strings.Contains(got, "real-secret-123") {
+		t.Fatalf("judge input leaked credential value: %+v", localJudge.input)
+	}
+	if !strings.Contains(got, "[redacted-credential]") {
+		t.Fatalf("judge input missing redaction marker: %+v", localJudge.input)
+	}
+}
+
+func TestJudgePolicyFailsOpenWhenJudgeUnavailable(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server, err := NewServerWithOptions(store, Options{
+		Judge: &recordingJudge{err: judge.Error{Kind: judge.FailureTimeout, Err: context.DeadlineExceeded}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "python scripts/deploy.py --dry-run"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Decision != risk.DecisionAllow || decision.ReasonCode != "judge_unavailable_allow" {
+		t.Fatalf("decision = %+v", decision)
+	}
+	if decision.RiskEvent.JudgeFailureKind != judge.FailureTimeout || decision.RiskEvent.DecisionStage != "judge_fail_open" {
+		t.Fatalf("risk event = %+v", decision.RiskEvent)
+	}
+}
+
+func TestJudgePolicyDeterministicDecisionSkipsJudge(t *testing.T) {
+	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	localJudge := &recordingJudge{}
+	server, err := NewServerWithOptions(store, Options{Judge: localJudge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := server.ProcessHookEvent(context.Background(), risk.HookEvent{
+		SessionID:     "s1",
+		HookEventName: "PreToolUse",
+		ToolName:      "Bash",
+		ToolInput:     map[string]any{"command": "drop database"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localJudge.calls != 0 {
+		t.Fatalf("judge calls = %d, want 0", localJudge.calls)
+	}
+	if decision.Decision != risk.DecisionDeny || decision.RiskEvent.DecisionStage != "deterministic" {
+		t.Fatalf("decision = %+v", decision)
+	}
+}
+
 func TestEvaluateHookRejectsTelemetryEvents(t *testing.T) {
 	store, err := sqlite.OpenStore(t.TempDir() + "/guard.db")
 	if err != nil {
@@ -329,6 +481,22 @@ type recordingPolicy struct {
 	called   bool
 	decision risk.RiskDecision
 	err      error
+}
+
+type recordingJudge struct {
+	calls  int
+	input  judge.Input
+	result judge.Result
+	err    error
+}
+
+func (j *recordingJudge) Decide(_ context.Context, input judge.Input) (judge.Result, error) {
+	j.calls++
+	j.input = input
+	if j.err != nil {
+		return judge.Result{}, j.err
+	}
+	return j.result, nil
 }
 
 func (p *recordingPolicy) DecideHook(_ context.Context, _ risk.HookEvent) (risk.RiskDecision, error) {
