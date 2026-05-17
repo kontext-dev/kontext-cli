@@ -91,6 +91,26 @@ func TestLaunchFixturesMapToJudgeInput(t *testing.T) {
 	}
 }
 
+func TestCompareFixtureOutputMatchesCategoriesWithoutOrderDependency(t *testing.T) {
+	failures := CompareFixtureOutput(
+		Output{
+			Decision:   DecisionDeny,
+			RiskLevel:  RiskLevelHigh,
+			Categories: []string{"production_mutation", "credential_access", "credential_access"},
+			Reason:     "Production credential access is blocked.",
+		},
+		FixtureExpected{
+			Decision:       DecisionDeny,
+			RiskLevel:      RiskLevelHigh,
+			Categories:     []string{"credential_access", "production_mutation"},
+			ReasonContains: []string{"production", "credential"},
+		},
+	)
+	if len(failures) != 0 {
+		t.Fatalf("CompareFixtureOutput() failures = %v, want none", failures)
+	}
+}
+
 func loadLaunchFixtures(t *testing.T) []Fixture {
 	t.Helper()
 	file, err := os.Open("testdata/launch-v0.jsonl")
